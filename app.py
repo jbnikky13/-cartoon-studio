@@ -4,157 +4,217 @@ import tempfile
 import subprocess
 import shutil
 import re
-import math
 import os
+import json
+import math
 from PIL import Image, ImageDraw, ImageFont
 import imageio_ffmpeg
 
 # ============================================================
-# CARTOON STUDIO V2.0
-# Animated original 2D character video creator
+# CARTOON STUDIO V3
 # ============================================================
 
 st.set_page_config(
-    page_title="Cartoon Studio V2",
+    page_title="Cartoon Studio V3",
     page_icon="🎬",
     layout="wide"
 )
 
-WORK = Path(tempfile.gettempdir()) / "cartoon_studio_v2"
+WORK = Path(tempfile.gettempdir()) / "cartoon_studio_v3"
 WORK.mkdir(exist_ok=True)
 
-# ------------------------------------------------------------
-# ORIGINAL CHARACTER LIBRARY
-# ------------------------------------------------------------
+
+# ============================================================
+# ORIGINAL CHARACTER CAST
+# ============================================================
 
 CHARACTERS = {
-    "Alex": {
-        "role": "young man",
-        "skin": (176, 116, 82),
-        "hair": (38, 28, 25),
-        "shirt": (60, 120, 215),
-        "pants": (45, 55, 75)
+    "Zuri Spark": {
+        "tag": "The fast-talking optimist",
+        "skin": (132, 82, 61),
+        "hair": (38, 24, 25),
+        "shirt": (224, 92, 80),
+        "pants": (45, 55, 75),
+        "accent": "🌟"
     },
-    "Maya": {
-        "role": "young woman",
-        "skin": (120, 78, 58),
-        "hair": (35, 22, 20),
-        "shirt": (205, 85, 145),
-        "pants": (55, 60, 75)
+
+    "Milo Quirk": {
+        "tag": "The deadpan problem-solver",
+        "skin": (177, 118, 84),
+        "hair": (55, 38, 28),
+        "shirt": (65, 145, 180),
+        "pants": (48, 55, 70),
+        "accent": "🧠"
     },
-    "Jay": {
-        "role": "teen boy",
-        "skin": (150, 92, 62),
-        "hair": (25, 22, 20),
-        "shirt": (55, 160, 105),
-        "pants": (50, 70, 100)
+
+    "Kemi Bolt": {
+        "tag": "The fearless tinkerer",
+        "skin": (105, 68, 52),
+        "hair": (28, 22, 20),
+        "shirt": (230, 164, 58),
+        "pants": (55, 65, 75),
+        "accent": "⚡"
     },
-    "Nia": {
-        "role": "teen girl",
-        "skin": (145, 92, 68),
-        "hair": (30, 22, 20),
-        "shirt": (150, 95, 205),
-        "pants": (60, 55, 80)
+
+    "Tari Reed": {
+        "tag": "The calm observer",
+        "skin": (154, 96, 69),
+        "hair": (42, 28, 25),
+        "shirt": (92, 170, 130),
+        "pants": (50, 60, 75),
+        "accent": "👀"
     },
-    "Dr. James": {
-        "role": "doctor",
-        "skin": (125, 82, 62),
-        "hair": (80, 65, 55),
-        "shirt": (238, 238, 238),
-        "pants": (65, 75, 90)
+
+    "Biko Bean": {
+        "tag": "The snack-loving philosopher",
+        "skin": (124, 77, 58),
+        "hair": (70, 48, 35),
+        "shirt": (155, 100, 190),
+        "pants": (55, 55, 70),
+        "accent": "🍪"
     },
-    "Pharmacist": {
-        "role": "pharmacist",
-        "skin": (105, 70, 54),
-        "hair": (35, 28, 25),
-        "shirt": (65, 175, 155),
-        "pants": (45, 60, 70)
+
+    "Nala Vee": {
+        "tag": "The ambitious overachiever",
+        "skin": (184, 121, 88),
+        "hair": (30, 24, 22),
+        "shirt": (70, 115, 205),
+        "pants": (55, 55, 80),
+        "accent": "🚀"
     },
-    "Teacher": {
-        "role": "teacher",
-        "skin": (180, 120, 88),
-        "hair": (90, 65, 45),
-        "shirt": (220, 150, 65),
-        "pants": (60, 70, 80)
+
+    "Dex Orbit": {
+        "tag": "The conspiracy-minded friend",
+        "skin": (145, 91, 66),
+        "hair": (35, 27, 24),
+        "shirt": (100, 105, 120),
+        "pants": (45, 50, 65),
+        "accent": "🛰️"
     },
-    "Mr. Cole": {
-        "role": "businessman",
-        "skin": (125, 82, 60),
-        "hair": (35, 28, 25),
-        "shirt": (50, 58, 88),
-        "pants": (42, 48, 65)
+
+    "Ayo Finch": {
+        "tag": "The quiet comedian",
+        "skin": (111, 70, 53),
+        "hair": (26, 22, 20),
+        "shirt": (205, 90, 135),
+        "pants": (55, 60, 70),
+        "accent": "😏"
     },
-    "Chris": {
-        "role": "student",
-        "skin": (170, 110, 80),
-        "hair": (40, 28, 25),
-        "shirt": (90, 125, 195),
-        "pants": (55, 65, 85)
+
+    "Rhea Moss": {
+        "tag": "The practical realist",
+        "skin": (160, 103, 75),
+        "hair": (82, 52, 35),
+        "shirt": (85, 150, 190),
+        "pants": (50, 60, 75),
+        "accent": "📌"
     },
-    "Uncle Ben": {
-        "role": "elder",
-        "skin": (125, 82, 62),
+
+    "Professor Pogo": {
+        "tag": "The eccentric explainer",
+        "skin": (185, 125, 92),
         "hair": (145, 145, 145),
-        "shirt": (145, 100, 70),
-        "pants": (55, 60, 70)
+        "shirt": (225, 225, 220),
+        "pants": (65, 75, 85),
+        "accent": "💡"
     },
-    "Officer Ray": {
-        "role": "police officer",
-        "skin": (145, 92, 65),
-        "hair": (35, 28, 25),
-        "shirt": (55, 90, 155),
-        "pants": (45, 55, 80)
+
+    "Jax Noon": {
+        "tag": "The dramatic storyteller",
+        "skin": (119, 75, 57),
+        "hair": (30, 24, 21),
+        "shirt": (190, 75, 70),
+        "pants": (48, 52, 65),
+        "accent": "🎭"
     },
-    "DJ K": {
-        "role": "performer",
-        "skin": (105, 68, 54),
-        "hair": (25, 20, 20),
-        "shirt": (150, 70, 180),
-        "pants": (45, 45, 65)
+
+    "Simi Ray": {
+        "tag": "The curious newcomer",
+        "skin": (137, 85, 62),
+        "hair": (44, 29, 24),
+        "shirt": (75, 180, 165),
+        "pants": (55, 60, 75),
+        "accent": "🔎"
     }
 }
+
+
+# ============================================================
+# ORIGINAL VISUAL STYLES
+# ============================================================
+
+STYLES = {
+    "Bold 2D Comedy":
+        "clean original 2D cartoon, expressive faces, strong silhouettes, playful comedy energy",
+
+    "Flat Vector":
+        "clean flat vector illustration, simple shapes and crisp outlines",
+
+    "Comic Panel":
+        "original comic-panel illustration, dynamic framing and expressive poses",
+
+    "Storybook":
+        "warm hand-drawn storybook illustration with textured linework",
+
+    "Retro Cartoon":
+        "original retro television cartoon aesthetic with expressive poses",
+
+    "Sketch Motion":
+        "loose animated sketch aesthetic with energetic linework",
+
+    "Anime-Inspired":
+        "original anime-inspired 2D illustration with expressive faces",
+
+    "Noir Cartoon":
+        "original noir cartoon aesthetic with dramatic framing"
+}
+
+
+LOCATIONS = [
+    "Apartment",
+    "Classroom",
+    "Pharmacy",
+    "Office",
+    "Street",
+    "Restaurant",
+    "Park",
+    "Bus Stop",
+    "Corner Shop",
+    "Rooftop"
+]
+
 
 EXPRESSIONS = [
     "Neutral",
     "Happy",
     "Surprised",
     "Thinking",
-    "Angry",
-    "Laughing"
+    "Annoyed",
+    "Laughing",
+    "Confused",
+    "Excited"
 ]
 
-SCENES = {
-    "Living Room": "home",
-    "Classroom": "school",
-    "Pharmacy": "pharmacy",
-    "Hospital": "hospital",
-    "Office": "office",
-    "City Street": "street",
-    "Restaurant": "restaurant",
-    "Park": "park"
-}
 
-VOICE_OPTIONS = [
-    "Warm adult",
-    "Young male",
-    "Young female",
-    "Deep adult",
-    "Bright adult",
-    "Energetic",
-    "Calm",
-    "Comic"
+ACTIONS = [
+    "Talking",
+    "Listening",
+    "Pointing",
+    "Waving",
+    "Thinking",
+    "Walking",
+    "Laughing",
+    "Reacting"
 ]
 
-# ------------------------------------------------------------
-# UTILITIES
-# ------------------------------------------------------------
 
-def ffmpeg():
-    return imageio_ffmpeg.get_ffmpeg_exe()
+# ============================================================
+# FONT
+# ============================================================
 
+def get_font(size=28, bold=False):
 
-def font(size=32, bold=False):
-    paths = [
+    candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
         if bold
         else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -164,24 +224,34 @@ def font(size=32, bold=False):
         else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"
     ]
 
-    for p in paths:
-        if Path(p).exists():
-            return ImageFont.truetype(p, size)
+    for path in candidates:
+
+        if Path(path).exists():
+            return ImageFont.truetype(path, size)
 
     return ImageFont.load_default()
 
 
-def wrap(text, chars=43):
+# ============================================================
+# TEXT WRAPPING
+# ============================================================
+
+def wrap(text, limit=55):
+
     words = text.split()
+
     lines = []
     current = ""
 
     for word in words:
-        test = f"{current} {word}".strip()
 
-        if len(test) <= chars:
+        test = (current + " " + word).strip()
+
+        if len(test) <= limit:
             current = test
+
         else:
+
             if current:
                 lines.append(current)
 
@@ -193,1009 +263,544 @@ def wrap(text, chars=43):
     return lines
 
 
-def parse_script(script):
+# ============================================================
+# SCRIPT PARSER
+# ============================================================
+
+def parse_script(text):
+
     rows = []
 
-    for raw in script.splitlines():
+    for line in text.splitlines():
 
-        line = raw.strip()
+        line = line.strip()
 
         if not line:
             continue
 
-        m = re.match(
+        match = re.match(
             r"^([^:]{1,40}):\s*(.+)$",
             line
         )
 
-        if m:
-            rows.append(
-                (
-                    m.group(1).strip(),
-                    m.group(2).strip()
-                )
-            )
+        if match:
+
+            speaker = match.group(1).strip()
+            dialogue = match.group(2).strip()
+
         else:
-            rows.append(
-                ("Narrator", line)
-            )
+
+            speaker = "Narrator"
+            dialogue = line
+
+        rows.append((speaker, dialogue))
 
     return rows
 
 
-# ------------------------------------------------------------
-# BACKGROUNDS
-# ------------------------------------------------------------
+# ============================================================
+# BACKGROUND
+# ============================================================
 
-def draw_background(d, scene, w, h):
+def draw_background(draw, location, width, height):
 
-    sky = (185, 220, 245)
-    floor = (150, 145, 125)
-
-    d.rectangle(
-        [0, 0, w, int(h * .67)],
-        fill=sky
+    draw.rectangle(
+        [0, 0, width, height],
+        fill=(195, 220, 238)
     )
 
-    d.rectangle(
-        [0, int(h * .67), w, h],
-        fill=floor
+    draw.rectangle(
+        [0, int(height * 0.68), width, height],
+        fill=(145, 135, 115)
     )
 
-    if scene == "home":
+    draw.rectangle(
+        [55, 70, width - 55, int(height * 0.68)],
+        fill=(232, 225, 211),
+        outline=(65, 65, 65),
+        width=4
+    )
 
-        d.rectangle(
-            [90, 115, 1190, 500],
-            fill=(235, 220, 195),
-            outline=(80, 70, 65),
-            width=5
-        )
+    labels = {
 
-        d.rectangle(
-            [150, 200, 480, 390],
-            fill=(125, 95, 75),
-            outline=(70, 60, 55),
-            width=5
-        )
+        "Apartment": "LIVING ROOM",
+        "Classroom": "CLASSROOM",
+        "Pharmacy": "COMMUNITY PHARMACY",
+        "Office": "OFFICE",
+        "Street": "CITY STREET",
+        "Restaurant": "RESTAURANT",
+        "Park": "PARK",
+        "Bus Stop": "BUS STOP",
+        "Corner Shop": "CORNER SHOP",
+        "Rooftop": "ROOFTOP"
+    }
 
-        d.rectangle(
-            [210, 235, 420, 345],
-            fill=(80, 160, 205),
-            outline=(60, 60, 60),
-            width=4
-        )
+    title = labels[location]
 
-        d.rectangle(
-            [720, 325, 1040, 465],
-            fill=(115, 80, 60),
-            outline=(70, 55, 45),
-            width=5
-        )
+    draw.text(
+        (width // 2 - 120, 95),
+        title,
+        font=get_font(30, True),
+        fill=(50, 50, 55)
+    )
 
-        d.text(
-            (500, 135),
-            "LIVING ROOM",
-            font=font(34, True),
-            fill=(55, 50, 45)
-        )
+    if location in [
+        "Apartment",
+        "Office",
+        "Classroom",
+        "Pharmacy",
+        "Restaurant",
+        "Corner Shop"
+    ]:
 
-    elif scene == "school":
+        for x in [140, 470, 800]:
 
-        d.rectangle(
-            [80, 90, 1200, 505],
-            fill=(235, 225, 190),
-            outline=(70, 65, 55),
-            width=5
-        )
-
-        d.rectangle(
-            [280, 150, 1000, 315],
-            fill=(45, 80, 60),
-            outline=(40, 45, 40),
-            width=5
-        )
-
-        d.text(
-            (330, 195),
-            "TODAY'S LESSON",
-            font=font(42, True),
-            fill=(245, 245, 235)
-        )
-
-        for x in [150, 470, 790]:
-
-            d.rectangle(
-                [x, 380, x + 210, 470],
-                fill=(125, 90, 65),
-                outline=(70, 55, 45),
-                width=4
+            draw.rectangle(
+                [x, 300, x + 210, 440],
+                fill=(150, 120, 95),
+                outline=(70, 60, 55),
+                width=3
             )
 
-        d.text(
-            (510, 105),
-            "CLASSROOM",
-            font=font(34, True),
-            fill=(55, 50, 45)
+    elif location in ["Park", "Rooftop"]:
+
+        draw.rectangle(
+            [0, 500, width, height],
+            fill=(105, 170, 100)
         )
 
-    elif scene == "pharmacy":
+        for x in [150, 1000]:
 
-        d.rectangle(
-            [70, 95, 1210, 505],
-            fill=(220, 238, 230),
-            outline=(55, 80, 70),
-            width=5
-        )
-
-        d.rectangle(
-            [100, 125, 1180, 210],
-            fill=(65, 160, 140)
-        )
-
-        d.text(
-            (410, 145),
-            "COMMUNITY PHARMACY",
-            font=font(38, True),
-            fill="white"
-        )
-
-        for x in [140, 440, 740]:
-
-            d.rectangle(
-                [x, 260, x + 210, 450],
-                fill=(245, 245, 240),
-                outline=(75, 85, 80),
-                width=4
-            )
-
-            for yy in [290, 335, 380]:
-
-                d.rectangle(
-                    [x + 25, yy, x + 180, yy + 28],
-                    fill=(180, 210, 205),
-                    outline=(80, 100, 95),
-                    width=2
-                )
-
-    elif scene == "hospital":
-
-        d.rectangle(
-            [80, 90, 1200, 510],
-            fill=(235, 240, 245),
-            outline=(70, 80, 90),
-            width=5
-        )
-
-        d.rectangle(
-            [500, 145, 780, 300],
-            fill=(65, 110, 170),
-            outline=(50, 70, 95),
-            width=5
-        )
-
-        d.rectangle(
-            [610, 175, 670, 270],
-            fill="white"
-        )
-
-        d.rectangle(
-            [570, 210, 710, 235],
-            fill="white"
-        )
-
-        d.text(
-            (475, 110),
-            "HOSPITAL",
-            font=font(38, True),
-            fill=(50, 60, 70)
-        )
-
-    elif scene == "office":
-
-        d.rectangle(
-            [70, 90, 1210, 500],
-            fill=(215, 215, 220),
-            outline=(70, 70, 75),
-            width=5
-        )
-
-        d.rectangle(
-            [150, 160, 470, 420],
-            fill=(130, 145, 155),
-            outline=(65, 70, 75),
-            width=5
-        )
-
-        d.rectangle(
-            [700, 330, 1080, 460],
-            fill=(100, 75, 55),
-            outline=(60, 50, 45),
-            width=5
-        )
-
-        d.text(
-            (500, 120),
-            "OFFICE",
-            font=font(38, True),
-            fill=(50, 50, 55)
-        )
-
-    elif scene == "street":
-
-        d.rectangle(
-            [0, 430, w, h],
-            fill=(95, 95, 100)
-        )
-
-        d.rectangle(
-            [0, 500, w, 540],
-            fill=(245, 225, 100)
-        )
-
-        for x in range(0, w, 180):
-
-            d.rectangle(
-                [x, 200, x + 120, 430],
-                fill=(180, 165, 150),
-                outline=(80, 75, 70),
-                width=4
-            )
-
-            d.rectangle(
-                [x + 25, 240, x + 55, 290],
-                fill=(120, 180, 210)
-            )
-
-            d.rectangle(
-                [x + 70, 240, x + 100, 290],
-                fill=(120, 180, 210)
-            )
-
-        d.text(
-            (535, 105),
-            "CITY STREET",
-            font=font(38, True),
-            fill=(50, 50, 55)
-        )
-
-    elif scene == "restaurant":
-
-        d.rectangle(
-            [70, 95, 1210, 500],
-            fill=(245, 215, 190),
-            outline=(80, 65, 60),
-            width=5
-        )
-
-        for x in [180, 520, 860]:
-
-            d.ellipse(
-                [x, 300, x + 210, 430],
-                fill=(150, 80, 65),
-                outline=(80, 55, 50),
-                width=5
-            )
-
-            d.line(
-                [x + 30, 430, x + 20, 500],
-                fill=(60, 55, 50),
-                width=8
-            )
-
-            d.line(
-                [x + 180, 430, x + 190, 500],
-                fill=(60, 55, 50),
-                width=8
-            )
-
-        d.text(
-            (500, 125),
-            "RESTAURANT",
-            font=font(38, True),
-            fill=(60, 45, 40)
-        )
-
-    elif scene == "park":
-
-        d.rectangle(
-            [0, 0, w, 500],
-            fill=(165, 220, 245)
-        )
-
-        d.rectangle(
-            [0, 440, w, h],
-            fill=(115, 175, 100)
-        )
-
-        for x, y in [
-            (120, 220),
-            (1030, 185),
-            (760, 240)
-        ]:
-
-            d.rectangle(
-                [x + 35, y + 120, x + 65, 440],
+            draw.rectangle(
+                [x, 300, x + 28, 500],
                 fill=(105, 70, 45)
             )
 
-            d.ellipse(
-                [x - 40, y, x + 140, y + 160],
-                fill=(70, 145, 75),
-                outline=(55, 105, 60),
-                width=4
+            draw.ellipse(
+                [x - 55, 220, x + 85, 360],
+                fill=(70, 145, 75)
             )
-
-        d.text(
-            (550, 105),
-            "PARK",
-            font=font(38, True),
-            fill=(50, 70, 50)
-        )
-
-
-# ------------------------------------------------------------
-# CHARACTER DRAWING
-# ------------------------------------------------------------
-
-def draw_character(
-    d,
-    name,
-    x,
-    ground_y,
-    scale,
-    expression,
-    talking,
-    frame_no
-):
-
-    c = CHARACTERS[name]
-
-    s = scale
-
-    bob = int(
-        5 * math.sin(frame_no / 4.0)
-    )
-
-    sway = int(
-        3 * math.sin(frame_no / 7.0)
-    )
-
-    x += sway
-    ground_y += bob
-
-    head_r = int(58 * s)
-
-    body_w = int(92 * s)
-    body_h = int(135 * s)
-
-    # Shadow
-    d.ellipse(
-        [
-            x - int(80 * s),
-            ground_y - 5,
-            x + int(80 * s),
-            ground_y + int(15 * s)
-        ],
-        fill=(70, 80, 75)
-    )
-
-    # Legs
-    leg_y = ground_y - int(110 * s)
-
-    d.line(
-        [
-            x - int(22 * s),
-            leg_y + int(70 * s),
-            x - int(38 * s),
-            ground_y
-        ],
-        fill=(45, 45, 50),
-        width=max(5, int(13 * s))
-    )
-
-    d.line(
-        [
-            x + int(22 * s),
-            leg_y + int(70 * s),
-            x + int(38 * s),
-            ground_y
-        ],
-        fill=(45, 45, 50),
-        width=max(5, int(13 * s))
-    )
-
-    # Body
-    body_top = ground_y - int(235 * s)
-
-    d.rounded_rectangle(
-        [
-            x - int(body_w * s / 2),
-            body_top,
-            x + int(body_w * s / 2),
-            ground_y - int(80 * s)
-        ],
-        radius=int(25 * s),
-        fill=c["shirt"],
-        outline=(45, 50, 60),
-        width=max(2, int(4 * s))
-    )
-
-    # Arms
-    arm_y = body_top + int(48 * s)
-
-    if expression in ["Happy", "Laughing"]:
-
-        left_end = (
-            x - int(80 * s),
-            arm_y - int(25 * s)
-        )
-
-        right_end = (
-            x + int(80 * s),
-            arm_y - int(25 * s)
-        )
-
-    elif expression == "Surprised":
-
-        left_end = (
-            x - int(78 * s),
-            arm_y + int(20 * s)
-        )
-
-        right_end = (
-            x + int(78 * s),
-            arm_y + int(20 * s)
-        )
-
-    elif expression == "Thinking":
-
-        left_end = (
-            x - int(72 * s),
-            arm_y + int(45 * s)
-        )
-
-        right_end = (
-            x + int(25 * s),
-            body_top + int(5 * s)
-        )
 
     else:
 
-        left_end = (
-            x - int(70 * s),
-            arm_y + int(45 * s)
+        draw.rectangle(
+            [0, 480, width, height],
+            fill=(90, 92, 96)
         )
 
-        right_end = (
-            x + int(70 * s),
-            arm_y + int(45 * s)
-        )
+        for x in range(80, width, 240):
 
-    d.line(
-        [
-            x - int(body_w * s / 2),
-            arm_y,
-            left_end[0],
-            left_end[1]
-        ],
-        fill=c["shirt"],
-        width=max(8, int(22 * s))
+            draw.rectangle(
+                [x, 200, x + 160, 480],
+                fill=(170, 160, 150),
+                outline=(75, 70, 68),
+                width=3
+            )
+
+
+# ============================================================
+# CHARACTER
+# ============================================================
+
+def draw_character(
+    draw,
+    name,
+    x,
+    ground,
+    scale,
+    expression,
+    talking,
+    frame,
+    action
+):
+
+    character = CHARACTERS[name]
+
+    head_size = int(58 * scale)
+
+    bob = int(
+        5 * math.sin(frame / 5)
     )
 
-    d.line(
+    x += int(
+        3 * math.sin(frame / 8)
+    )
+
+    ground += bob
+
+    head_y = ground - int(300 * scale)
+
+    body_top = ground - int(235 * scale)
+
+    # Shadow
+
+    draw.ellipse(
         [
-            x + int(body_w * s / 2),
-            arm_y,
-            right_end[0],
-            right_end[1]
+            x - 75,
+            ground - 4,
+            x + 75,
+            ground + 15
         ],
-        fill=c["shirt"],
-        width=max(8, int(22 * s))
+        fill=(80, 80, 80)
+    )
+
+    # Legs
+
+    draw.line(
+        [x - 20, ground - 95, x - 35, ground],
+        fill=(45, 45, 50),
+        width=13
+    )
+
+    draw.line(
+        [x + 20, ground - 95, x + 35, ground],
+        fill=(45, 45, 50),
+        width=13
+    )
+
+    # Body
+
+    draw.rounded_rectangle(
+        [
+            x - 46,
+            body_top,
+            x + 46,
+            ground - 80
+        ],
+        radius=20,
+        fill=character["shirt"],
+        outline=(45, 45, 50),
+        width=4
+    )
+
+    # Arms
+
+    arm_y = body_top + 45
+
+    lift = 25 if action in [
+        "Waving",
+        "Pointing",
+        "Excited"
+    ] else 0
+
+    draw.line(
+        [
+            x - 45,
+            arm_y,
+            x - 80,
+            arm_y - 20 - lift
+        ],
+        fill=character["shirt"],
+        width=20
+    )
+
+    draw.line(
+        [
+            x + 45,
+            arm_y,
+            x + 80,
+            arm_y - 20 - lift
+        ],
+        fill=character["shirt"],
+        width=20
     )
 
     # Head
-    head_y = body_top - int(58 * s)
 
-    d.ellipse(
+    draw.ellipse(
         [
-            x - head_r,
-            head_y - head_r,
-            x + head_r,
-            head_y + head_r
+            x - head_size,
+            head_y - head_size,
+            x + head_size,
+            head_y + head_size
         ],
-        fill=c["skin"],
+        fill=character["skin"],
         outline=(55, 45, 40),
-        width=max(2, int(4 * s))
+        width=4
     )
 
     # Hair
-    hair_box = [
-        x - head_r - int(4 * s),
-        head_y - head_r - int(8 * s),
-        x + head_r + int(4 * s),
-        head_y + int(15 * s)
-    ]
 
-    d.arc(
-        hair_box,
+    draw.arc(
+        [
+            x - head_size - 3,
+            head_y - head_size - 5,
+            x + head_size + 3,
+            head_y + 20
+        ],
         180,
         360,
-        fill=c["hair"],
-        width=max(8, int(16 * s))
-    )
-
-    # Ears
-    d.ellipse(
-        [
-            x - head_r - int(9 * s),
-            head_y - int(12 * s),
-            x - head_r + int(10 * s),
-            head_y + int(12 * s)
-        ],
-        fill=c["skin"]
-    )
-
-    d.ellipse(
-        [
-            x + head_r - int(10 * s),
-            head_y - int(12 * s),
-            x + head_r + int(9 * s),
-            head_y + int(12 * s)
-        ],
-        fill=c["skin"]
+        fill=character["hair"],
+        width=16
     )
 
     # Eyes
-    eye_y = head_y - int(12 * s)
-    eye_dx = int(22 * s)
 
-    eye_h = 9
-    eye_w = 12
+    eye_y = head_y - 12
+    dx = 22
 
-    if expression == "Surprised":
+    eye_height = (
+        15
+        if expression in ["Surprised", "Excited"]
+        else 8
+    )
 
-        eye_h = 15
-        eye_w = 15
-
-    elif expression == "Angry":
-
-        eye_h = 6
-
-    d.ellipse(
+    draw.ellipse(
         [
-            x - eye_dx - eye_w,
-            eye_y - eye_h,
-            x - eye_dx + eye_w,
-            eye_y + eye_h
+            x - dx - 11,
+            eye_y - eye_height,
+            x - dx + 11,
+            eye_y + eye_height
         ],
         fill=(25, 25, 25)
     )
 
-    d.ellipse(
+    draw.ellipse(
         [
-            x + eye_dx - eye_w,
-            eye_y - eye_h,
-            x + eye_dx + eye_w,
-            eye_y + eye_h
+            x + dx - 11,
+            eye_y - eye_height,
+            x + dx + 11,
+            eye_y + eye_height
         ],
         fill=(25, 25, 25)
     )
 
-    # Eyebrows
-    brow_y = eye_y - int(15 * s)
+    # Mouth
 
-    if expression == "Angry":
+    mouth_y = head_y + 35
 
-        d.line(
+    if expression in ["Laughing", "Happy"]:
+
+        draw.arc(
             [
-                x - eye_dx - int(15 * s),
-                brow_y - int(5 * s),
-                x - eye_dx + int(8 * s),
-                brow_y + int(7 * s)
+                x - 28,
+                mouth_y - 15,
+                x + 28,
+                mouth_y + 25
             ],
-            fill=(40, 30, 25),
-            width=max(3, int(5 * s))
-        )
-
-        d.line(
-            [
-                x + eye_dx - int(8 * s),
-                brow_y + int(7 * s),
-                x + eye_dx + int(15 * s),
-                brow_y - int(5 * s)
-            ],
-            fill=(40, 30, 25),
-            width=max(3, int(5 * s))
-        )
-
-    elif expression == "Surprised":
-
-        d.arc(
-            [
-                x - eye_dx - int(12 * s),
-                brow_y - int(12 * s),
-                x - eye_dx + int(12 * s),
-                brow_y + int(12 * s)
-            ],
+            0,
             180,
-            360,
-            fill=(40, 30, 25),
-            width=max(2, int(4 * s))
-        )
-
-        d.arc(
-            [
-                x + eye_dx - int(12 * s),
-                brow_y - int(12 * s),
-                x + eye_dx + int(12 * s),
-                brow_y + int(12 * s)
-            ],
-            180,
-            360,
-            fill=(40, 30, 25),
-            width=max(2, int(4 * s))
-        )
-
-    # Nose
-    d.line(
-        [
-            x,
-            head_y,
-            x - int(7 * s),
-            head_y + int(18 * s),
-            x + int(5 * s),
-            head_y + int(20 * s)
-        ],
-        fill=(105, 65, 50),
-        width=max(2, int(3 * s))
-    )
-
-    # Mouth / lip sync
-    mouth_y = head_y + int(34 * s)
-
-    if expression in ["Happy", "Laughing"]:
-
-        if talking:
-
-            d.ellipse(
-                [
-                    x - int(25 * s),
-                    mouth_y - int(5 * s),
-                    x + int(25 * s),
-                    mouth_y + int(25 * s)
-                ],
-                fill=(90, 30, 35)
-            )
-
-        else:
-
-            d.arc(
-                [
-                    x - int(28 * s),
-                    mouth_y - int(15 * s),
-                    x + int(28 * s),
-                    mouth_y + int(22 * s)
-                ],
-                0,
-                180,
-                fill=(80, 25, 30),
-                width=max(2, int(5 * s))
-            )
-
-    elif expression == "Surprised":
-
-        d.ellipse(
-            [
-                x - int(16 * s),
-                mouth_y - int(3 * s),
-                x + int(16 * s),
-                mouth_y + int(28 * s)
-            ],
-            fill=(80, 25, 30)
-        )
-
-    elif expression == "Thinking":
-
-        d.arc(
-            [
-                x - int(22 * s),
-                mouth_y,
-                x + int(22 * s),
-                mouth_y + int(22 * s)
-            ],
-            180,
-            360,
-            fill=(80, 35, 35),
-            width=max(2, int(4 * s))
+            fill=(80, 25, 30),
+            width=5
         )
 
     elif talking:
 
-        mouth_open = int(
-            (
-                12 +
-                10 *
-                abs(
-                    math.sin(
-                        frame_no / 2.2
-                    )
-                )
-            ) * s
+        opening = int(
+            9 + 10 * abs(
+                math.sin(frame / 2.2)
+            )
         )
 
-        d.ellipse(
+        draw.ellipse(
             [
-                x - int(23 * s),
-                mouth_y - int(2 * s),
-                x + int(23 * s),
-                mouth_y + mouth_open
+                x - 23,
+                mouth_y,
+                x + 23,
+                mouth_y + opening
+            ],
+            fill=(85, 25, 30)
+        )
+
+    elif expression == "Surprised":
+
+        draw.ellipse(
+            [
+                x - 14,
+                mouth_y,
+                x + 14,
+                mouth_y + 25
             ],
             fill=(85, 25, 30)
         )
 
     else:
 
-        d.line(
+        draw.line(
             [
-                x - int(18 * s),
-                mouth_y + int(8 * s),
-                x + int(18 * s),
-                mouth_y + int(8 * s)
+                x - 18,
+                mouth_y + 8,
+                x + 18,
+                mouth_y + 8
             ],
             fill=(80, 35, 35),
-            width=max(2, int(4 * s))
+            width=4
         )
 
     # Name tag
-    tag_y = ground_y + int(20 * s)
 
-    label = name
+    label = f"{character['accent']} {name}"
 
-    box = d.textbbox(
+    box = draw.textbbox(
         (0, 0),
         label,
-        font=font(20, True)
+        font=get_font(20, True)
     )
 
-    tw = box[2] - box[0]
+    text_width = box[2] - box[0]
 
-    d.rounded_rectangle(
+    draw.rounded_rectangle(
         [
-            x - tw // 2 - 10,
-            tag_y,
-            x + tw // 2 + 10,
-            tag_y + 32
+            x - text_width // 2 - 10,
+            ground + 22,
+            x + text_width // 2 + 10,
+            ground + 55
         ],
         radius=10,
-        fill=(255, 255, 255),
+        fill="white",
         outline=(70, 70, 70),
         width=2
     )
 
-    d.text(
-        (x - tw // 2, tag_y + 5),
+    draw.text(
+        (
+            x - text_width // 2,
+            ground + 27
+        ),
         label,
-        font=font(20, True),
+        font=get_font(20, True),
         fill=(35, 35, 35)
     )
 
 
-# ------------------------------------------------------------
-# FRAME RENDERING
-# ------------------------------------------------------------
+# ============================================================
+# RENDER FRAME
+# ============================================================
 
-def render_scene(
+def render_frame(
     dialogue,
     speaker,
-    scene,
-    left_character,
-    right_character,
-    left_expression,
-    right_expression,
-    frame_no,
-    total_frames,
+    location,
+    left,
+    right,
+    expression_left,
+    expression_right,
+    action,
+    frame,
     size=(1280, 720)
 ):
 
-    w, h = size
+    width, height = size
 
-    img = Image.new(
+    image = Image.new(
         "RGB",
         size,
         (240, 240, 240)
     )
 
-    d = ImageDraw.Draw(img)
+    draw = ImageDraw.Draw(image)
 
     draw_background(
-        d,
-        scene,
-        w,
-        h
-    )
-
-    talking = frame_no % 6 in [0, 1, 2, 4]
-
-    left_x = 330
-    right_x = 900
-    ground = 650
-
-    camera = int(
-        4 * math.sin(frame_no / 15)
+        draw,
+        location,
+        width,
+        height
     )
 
     draw_character(
-        d,
-        left_character,
-        left_x + camera,
-        ground,
+        draw,
+        left,
+        330,
+        650,
         1.0,
-        (
-            "Happy"
-            if speaker == left_character
-            and left_expression == "Neutral"
-            else left_expression
-        ),
-        speaker == left_character and talking,
-        frame_no
+        expression_left,
+        speaker == left,
+        frame,
+        action
     )
 
-    if right_character:
+    if right:
 
         draw_character(
-            d,
-            right_character,
-            right_x + camera,
-            ground,
+            draw,
+            right,
+            900,
+            650,
             1.0,
-            (
-                "Happy"
-                if speaker == right_character
-                and right_expression == "Neutral"
-                else right_expression
-            ),
-            speaker == right_character and talking,
-            frame_no
+            expression_right,
+            speaker == right,
+            frame,
+            "Listening"
         )
 
-    # Dialogue panel
-    panel_x = 55
-    panel_y = 35
-    panel_w = 1170
-    panel_h = 145
+    # Dialogue bubble
 
-    d.rounded_rectangle(
-        [
-            panel_x,
-            panel_y,
-            panel_x + panel_w,
-            panel_y + panel_h
-        ],
-        radius=25,
+    draw.rounded_rectangle(
+        [45, 35, 1235, 180],
+        radius=24,
         fill=(255, 255, 255),
-        outline=(50, 50, 55),
+        outline=(45, 45, 50),
         width=4
     )
 
-    d.text(
-        (panel_x + 25, panel_y + 18),
+    draw.text(
+        (70, 58),
         speaker,
-        font=font(30, True),
-        fill=(40, 40, 45)
+        font=get_font(30, True),
+        fill=(35, 35, 40)
     )
 
-    lines = wrap(
-        dialogue,
-        75
-    )[:3]
+    y = 105
 
-    yy = panel_y + 62
+    for line in wrap(dialogue, 76)[:2]:
 
-    for line in lines:
-
-        d.text(
-            (panel_x + 25, yy),
+        draw.text(
+            (70, y),
             line,
-            font=font(28),
+            font=get_font(27),
             fill=(40, 40, 45)
         )
 
-        yy += 34
+        y += 34
 
-    # Scene label
-    d.rounded_rectangle(
-        [40, 675, 270, 710],
-        radius=12,
-        fill=(255, 255, 255),
-        outline=(70, 70, 70),
-        width=2
+    return image
+
+
+# ============================================================
+# VIDEO RENDERER
+# ============================================================
+
+def render_video(rows, project):
+
+    fps = 12
+
+    frames_dir = (
+        WORK / f"frames_{os.getpid()}"
     )
-
-    d.text(
-        (55, 682),
-        scene,
-        font=font(20, True),
-        fill=(45, 45, 45)
-    )
-
-    return img
-
-
-# ------------------------------------------------------------
-# VIDEO GENERATION
-# ------------------------------------------------------------
-
-def make_video(rows, settings):
-
-    out = WORK / f"cartoon_v2_{os.getpid()}.mp4"
-
-    frames_dir = WORK / f"frames_v2_{os.getpid()}"
 
     frames_dir.mkdir(
         exist_ok=True
     )
 
-    fps = 12
-    index = 0
+    output = (
+        WORK /
+        f"cartoon_v3_{os.getpid()}.mp4"
+    )
+
+    frame_index = 0
 
     try:
 
-        for scene_index, row in enumerate(rows):
+        for speaker, text in rows:
 
-            speaker, dialogue = row
+            if speaker not in project["cast"]:
 
-            selected = settings["characters"]
+                speaker = project["cast"][0]
 
-            known = {
-                n.lower(): n
-                for n in selected
-            }
-
-            if speaker.lower() in known:
-
-                actual_speaker = known[
-                    speaker.lower()
-                ]
-
-            else:
-
-                actual_speaker = selected[0]
-
-            others = [
-                n
-                for n in selected
-                if n != actual_speaker
-            ]
-
-            second = (
-                others[0]
-                if others
-                else None
-            )
-
-            scene = settings["scene"]
-
-            speaker_expression = (
-                settings["expressions"].get(
-                    actual_speaker,
-                    "Happy"
-                )
-            )
-
-            second_expression = (
-                settings["expressions"].get(
-                    second,
-                    "Neutral"
-                )
-                if second
-                else "Neutral"
+            other = next(
+                (
+                    x
+                    for x in project["cast"]
+                    if x != speaker
+                ),
+                None
             )
 
             duration = max(
-                2.5,
+                2.2,
                 min(
-                    10,
-                    1.8 + len(dialogue) / 18
+                    8.0,
+                    1.8 + len(text) / 20
                 )
             )
 
@@ -1203,37 +808,50 @@ def make_video(rows, settings):
                 duration * fps
             )
 
-            for f in range(frame_count):
+            for frame in range(frame_count):
 
-                image = render_scene(
-                    dialogue,
-                    actual_speaker,
-                    scene,
-                    actual_speaker,
-                    second,
-                    speaker_expression,
-                    second_expression,
-                    f,
-                    frame_count
+                image = render_frame(
+                    text,
+                    speaker,
+                    project["location"],
+                    speaker,
+                    other,
+                    project["expressions"].get(
+                        speaker,
+                        "Happy"
+                    ),
+                    project["expressions"].get(
+                        other,
+                        "Neutral"
+                    )
+                    if other
+                    else "Neutral",
+                    project["actions"].get(
+                        speaker,
+                        "Talking"
+                    ),
+                    frame
                 )
 
                 image.save(
                     frames_dir /
-                    f"frame_{index:06d}.png"
+                    f"f_{frame_index:06d}.png"
                 )
 
-                index += 1
+                frame_index += 1
+
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
 
         result = subprocess.run(
             [
-                ffmpeg(),
+                ffmpeg,
                 "-y",
                 "-framerate",
                 str(fps),
                 "-i",
                 str(
                     frames_dir /
-                    "frame_%06d.png"
+                    "f_%06d.png"
                 ),
                 "-c:v",
                 "libx264",
@@ -1241,17 +859,17 @@ def make_video(rows, settings):
                 "yuv420p",
                 "-movflags",
                 "+faststart",
-                str(out)
+                str(output)
             ],
             capture_output=True,
             text=True
         )
 
-        if result.returncode != 0:
+        if result.returncode == 0:
 
-            return None, result.stderr[-4000:]
+            return output, None
 
-        return out, None
+        return None, result.stderr[-3000:]
 
     finally:
 
@@ -1261,54 +879,53 @@ def make_video(rows, settings):
         )
 
 
-# ------------------------------------------------------------
-# JOIN VIDEOS
-# ------------------------------------------------------------
+# ============================================================
+# VIDEO JOINER
+# ============================================================
 
 def join_videos(files):
 
-    work = WORK / f"join_{os.getpid()}"
+    work = (
+        WORK /
+        f"join_{os.getpid()}"
+    )
 
     work.mkdir(
         exist_ok=True
     )
 
+    clips = []
+
     try:
 
-        clips = []
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
 
-        for i, file in enumerate(files):
+        for i, uploaded in enumerate(files):
 
-            source = work / f"source_{i}"
-            target = work / f"clip_{i}.mp4"
+            source = work / f"source{i}.mp4"
+            clip = work / f"clip{i}.mp4"
 
             source.write_bytes(
-                file.getvalue()
+                uploaded.getvalue()
             )
 
             result = subprocess.run(
                 [
-                    ffmpeg(),
+                    ffmpeg,
                     "-y",
                     "-i",
                     str(source),
                     "-vf",
-                    (
-                        "scale=1280:720:"
-                        "force_original_aspect_ratio=decrease,"
-                        "pad=1280:720:(ow-iw)/2:"
-                        "(oh-ih)/2,"
-                        "format=yuv420p"
-                    ),
+                    "scale=1280:720:force_original_aspect_ratio=decrease,"
+                    "pad=1280:720:(ow-iw)/2:(oh-ih)/2,"
+                    "format=yuv420p",
                     "-r",
                     "30",
                     "-c:v",
                     "libx264",
-                    "-preset",
-                    "veryfast",
                     "-c:a",
                     "aac",
-                    str(target)
+                    str(clip)
                 ],
                 capture_output=True,
                 text=True
@@ -1316,26 +933,27 @@ def join_videos(files):
 
             if result.returncode != 0:
 
-                return None, result.stderr[-4000:]
+                return None, result.stderr[-2500:]
 
-            clips.append(target)
+            clips.append(clip)
 
         manifest = work / "concat.txt"
 
         manifest.write_text(
             "\n".join(
-                f"file '{p.as_posix()}'"
-                for p in clips
+                f"file '{clip.as_posix()}'"
+                for clip in clips
             )
         )
 
-        output = WORK / (
-            f"joined_v2_{os.getpid()}.mp4"
+        output = (
+            WORK /
+            f"episode_{os.getpid()}.mp4"
         )
 
         result = subprocess.run(
             [
-                ffmpeg(),
+                ffmpeg,
                 "-y",
                 "-f",
                 "concat",
@@ -1353,11 +971,11 @@ def join_videos(files):
             text=True
         )
 
-        if result.returncode != 0:
+        if result.returncode == 0:
 
-            return None, result.stderr[-4000:]
+            return output, None
 
-        return output, None
+        return None, result.stderr[-2500:]
 
     finally:
 
@@ -1368,182 +986,216 @@ def join_videos(files):
 
 
 # ============================================================
-# UI
+# SESSION STATE
+# ============================================================
+
+if "project" not in st.session_state:
+
+    st.session_state.project = {
+
+        "name": "Untitled Cartoon",
+
+        "style": "Bold 2D Comedy",
+
+        "location": "Apartment",
+
+        "cast": [
+            "Zuri Spark",
+            "Milo Quirk"
+        ],
+
+        "expressions": {},
+
+        "actions": {},
+
+        "script": ""
+    }
+
+
+if "scenes" not in st.session_state:
+
+    st.session_state.scenes = []
+
+
+# ============================================================
+# HEADER
 # ============================================================
 
 st.markdown(
-    """
-    <style>
-    .block-container {
-        max-width: 1200px;
-        padding-top: 1.5rem;
-    }
-
-    .title {
-        font-size: 3rem;
-        font-weight: 800;
-    }
-
-    .subtitle {
-        font-size: 1.15rem;
-        opacity: .72;
-        margin-bottom: 1.5rem;
-    }
-    </style>
-    """,
+    "<h1>🎬 Cartoon Studio V3</h1>",
     unsafe_allow_html=True
 )
 
-st.markdown(
-    '<div class="title">🎬 Cartoon Studio V2</div>',
-    unsafe_allow_html=True
+st.caption(
+    "Write → Cast → Storyboard → Animate → Assemble"
 )
 
-st.markdown(
-    '<div class="subtitle">'
-    'Create animated 2D cartoon scenes from simple dialogue.'
-    '</div>',
-    unsafe_allow_html=True
-)
 
-create_tab, join_tab, help_tab = st.tabs(
+# ============================================================
+# TABS
+# ============================================================
+
+tabs = st.tabs(
     [
-        "✨ Create Cartoon",
+        "✨ New Cartoon",
+        "🧩 Storyboard",
+        "🎭 Character Library",
         "🎞️ Join Videos",
-        "ℹ️ How It Works"
+        "📁 Project"
     ]
 )
 
+
 # ============================================================
-# CREATE CARTOON
+# NEW CARTOON
 # ============================================================
 
-with create_tab:
+with tabs[0]:
 
-    st.header(
-        "Build your cartoon"
+    st.subheader(
+        "1. Choose your cartoon style"
     )
 
-    col1, col2 = st.columns(
-        [1, 1]
+    style_columns = st.columns(4)
+
+    styles = list(STYLES)
+
+    for i, style in enumerate(styles):
+
+        with style_columns[i % 4]:
+
+            if st.button(
+                f"🎨 {style}",
+                key=f"style_{i}",
+                use_container_width=True
+            ):
+
+                st.session_state.project[
+                    "style"
+                ] = style
+
+    selected_style = (
+        st.session_state.project["style"]
     )
 
-    with col1:
+    st.info(
+        f"Selected style: **{selected_style}**\n\n"
+        f"{STYLES[selected_style]}"
+    )
 
-        st.subheader(
-            "Characters"
-        )
+    # --------------------------------------------------------
 
-        selected = st.multiselect(
-            "Choose characters",
-            list(CHARACTERS.keys()),
-            default=[
-                "Alex",
-                "Maya",
-                "Jay"
-            ]
-        )
+    st.subheader(
+        "2. Choose your cast"
+    )
 
-        if not selected:
+    cast = st.multiselect(
+        "Choose up to 4 characters",
+        list(CHARACTERS),
+        default=st.session_state.project["cast"],
+        max_selections=4
+    )
 
-            selected = ["Alex"]
+    if not cast:
 
-        st.write(
-            "Selected characters:"
-        )
+        cast = ["Zuri Spark"]
 
-        for name in selected:
+    st.session_state.project[
+        "cast"
+    ] = cast
 
-            st.write(
-                f"• **{name}** — "
-                f"{CHARACTERS[name]['role']}"
+    columns = st.columns(
+        min(4, len(cast))
+    )
+
+    for i, name in enumerate(cast):
+
+        with columns[i]:
+
+            character = CHARACTERS[name]
+
+            st.markdown(
+                f"### {character['accent']} {name}"
             )
 
-    with col2:
+            st.caption(
+                character["tag"]
+            )
 
-        st.subheader(
-            "Scene"
-        )
-
-        scene = st.selectbox(
-            "Choose the main location",
-            list(SCENES.keys())
-        )
-
-        st.subheader(
-            "Character expressions"
-        )
-
-        expressions = {}
-
-        for name in selected:
-
-            expressions[name] = st.selectbox(
-                f"{name}",
+            st.session_state.project[
+                "expressions"
+            ][name] = st.selectbox(
+                "Expression",
                 EXPRESSIONS,
                 index=1,
                 key=f"expression_{name}"
             )
 
-    st.divider()
-
-    st.subheader(
-        "Character voices"
-    )
-
-    voice_map = {}
-
-    voice_columns = st.columns(
-        min(3, max(1, len(selected)))
-    )
-
-    for i, name in enumerate(selected):
-
-        with voice_columns[
-            i % len(voice_columns)
-        ]:
-
-            voice_map[name] = st.selectbox(
-                name,
-                VOICE_OPTIONS,
-                key=f"voice_{name}"
+            st.session_state.project[
+                "actions"
+            ][name] = st.selectbox(
+                "Action",
+                ACTIONS,
+                index=0,
+                key=f"action_{name}"
             )
 
-    st.caption(
-        "Voice profiles are saved with the project. "
-        "V2.0 prepares the animation pipeline; "
-        "real AI voice synthesis is the next voice backend upgrade."
-    )
-
-    st.divider()
+    # --------------------------------------------------------
 
     st.subheader(
-        "Write your script"
+        "3. Story setup"
     )
 
-    st.markdown(
-        "Use one dialogue line per scene:"
-    )
+    left, right = st.columns(2)
 
-    st.code(
-        "Alex: Did you know that honey can last for years?\n"
-        "Maya: Seriously? Even without refrigeration?\n"
-        "Jay: Wait... so honey basically has a superpower?"
+    with left:
+
+        st.session_state.project[
+            "name"
+        ] = st.text_input(
+            "Project name",
+            st.session_state.project["name"]
+        )
+
+    with right:
+
+        current_location = (
+            st.session_state.project["location"]
+        )
+
+        st.session_state.project[
+            "location"
+        ] = st.selectbox(
+            "Main location",
+            LOCATIONS,
+            index=LOCATIONS.index(
+                current_location
+            )
+        )
+
+    # --------------------------------------------------------
+
+    st.subheader(
+        "4. Paste your script"
     )
 
     script = st.text_area(
-        "Script",
+        "Dialogue",
         height=240,
+        value=st.session_state.project["script"],
         placeholder=(
-            "Alex: Did you know that honey can last for years?\n"
-            "Maya: Seriously?\n"
-            "Jay: That's crazy!"
-        ),
-        label_visibility="collapsed"
+            "Zuri Spark: I have a question.\n"
+            "Milo Quirk: That sounds dangerous already.\n"
+            "Zuri Spark: Why does the fridge light turn off when we close the door?"
+        )
     )
 
+    st.session_state.project[
+        "script"
+    ] = script
+
     if st.button(
-        "🎬 Generate Animated Cartoon",
+        "🧠 Build Storyboard",
         type="primary",
         use_container_width=True
     ):
@@ -1551,252 +1203,417 @@ with create_tab:
         if not script.strip():
 
             st.warning(
-                "Please enter a script."
-            )
-
-        elif len(selected) < 1:
-
-            st.warning(
-                "Choose at least one character."
+                "Add a script first."
             )
 
         else:
 
-            rows = parse_script(
-                script
+            rows = parse_script(script)
+
+            st.session_state.scenes = []
+
+            for i, (speaker, dialogue) in enumerate(rows):
+
+                if speaker not in cast:
+
+                    speaker = cast[0]
+
+                duration = max(
+                    2.2,
+                    min(
+                        8,
+                        1.8 + len(dialogue) / 20
+                    )
+                )
+
+                st.session_state.scenes.append(
+                    {
+                        "id": i + 1,
+                        "speaker": speaker,
+                        "dialogue": dialogue,
+                        "location": st.session_state.project["location"],
+                        "duration": duration,
+                        "shot": "Medium shot",
+                        "action": st.session_state.project[
+                            "actions"
+                        ].get(
+                            speaker,
+                            "Talking"
+                        )
+                    }
+                )
+
+            st.success(
+                f"Storyboard created with {len(rows)} shots."
             )
 
-            settings = {
-                "characters": selected,
-                "scene": scene,
-                "expressions": expressions,
-                "voices": voice_map
-            }
 
-            with st.spinner(
-                "Animating characters and scenes..."
+# ============================================================
+# STORYBOARD
+# ============================================================
+
+with tabs[1]:
+
+    st.subheader(
+        "🧩 Storyboard"
+    )
+
+    if not st.session_state.scenes:
+
+        st.info(
+            "Build a storyboard from the New Cartoon tab first."
+        )
+
+    else:
+
+        for i, scene in enumerate(
+            st.session_state.scenes
+        ):
+
+            with st.expander(
+                f"SHOT {scene['id']} · "
+                f"{scene['speaker']} · "
+                f"{scene['duration']:.1f}s",
+                expanded=(i == 0)
             ):
 
-                video, error = make_video(
+                col1, col2, col3 = st.columns(
+                    [1.2, 1.8, 1]
+                )
+
+                with col1:
+
+                    st.write(
+                        f"**📍 {scene['location']}**"
+                    )
+
+                    camera_options = [
+                        "Wide shot",
+                        "Medium shot",
+                        "Close-up",
+                        "Over-the-shoulder"
+                    ]
+
+                    scene["shot"] = st.selectbox(
+                        "Camera",
+                        camera_options,
+                        index=camera_options.index(
+                            scene["shot"]
+                        ),
+                        key=f"camera_{i}"
+                    )
+
+                    scene["duration"] = st.slider(
+                        "Duration",
+                        1.5,
+                        12.0,
+                        float(scene["duration"]),
+                        0.5,
+                        key=f"duration_{i}"
+                    )
+
+                with col2:
+
+                    scene["dialogue"] = st.text_area(
+                        "Dialogue",
+                        scene["dialogue"],
+                        key=f"dialogue_{i}",
+                        height=110
+                    )
+
+                with col3:
+
+                    scene["action"] = st.selectbox(
+                        "Action",
+                        ACTIONS,
+                        index=(
+                            ACTIONS.index(
+                                scene["action"]
+                            )
+                            if scene["action"]
+                            in ACTIONS
+                            else 0
+                        ),
+                        key=f"scene_action_{i}"
+                    )
+
+                    if st.button(
+                        "🗑️ Remove",
+                        key=f"remove_{i}"
+                    ):
+
+                        st.session_state.scenes.pop(i)
+
+                        st.rerun()
+
+        # ----------------------------------------------------
+
+        st.divider()
+
+        if st.button(
+            "🎬 Generate Cartoon From Storyboard",
+            type="primary",
+            use_container_width=True
+        ):
+
+            rows = [
+                (
+                    scene["speaker"],
+                    scene["dialogue"]
+                )
+                for scene in st.session_state.scenes
+            ]
+
+            with st.spinner(
+                "Rendering animated cartoon..."
+            ):
+
+                video, error = render_video(
                     rows,
-                    settings
+                    st.session_state.project
                 )
 
             if video:
 
-                st.session_state.v2_video = str(
+                st.session_state.output = str(
                     video
                 )
 
                 st.success(
-                    "🎉 Cartoon generated!"
+                    "Cartoon generated!"
                 )
 
             else:
 
                 st.error(
-                    "Video generation failed."
+                    error or
+                    "Rendering failed."
                 )
 
-                if error:
+        # ----------------------------------------------------
 
-                    st.code(
-                        error,
-                        language="text"
-                    )
-
-    if st.session_state.get(
-        "v2_video"
-    ):
-
-        path = Path(
-            st.session_state.v2_video
-        )
-
-        if path.exists():
-
-            st.subheader(
-                "Preview"
-            )
+        if (
+            st.session_state.get("output")
+            and
+            Path(
+                st.session_state.output
+            ).exists()
+        ):
 
             st.video(
-                str(path)
+                st.session_state.output
             )
 
             st.download_button(
-                "⬇️ Download Cartoon",
-                path.read_bytes(),
-                "cartoon_v2.mp4",
+                "⬇️ Download MP4",
+                Path(
+                    st.session_state.output
+                ).read_bytes(),
+                "cartoon_v3.mp4",
                 "video/mp4",
                 use_container_width=True
             )
 
 
 # ============================================================
-# JOIN VIDEOS
+# CHARACTER LIBRARY
 # ============================================================
 
-with join_tab:
+with tabs[2]:
 
-    st.header(
-        "🎞️ Join short videos"
+    st.subheader(
+        "🎭 Original Character Library"
     )
 
     st.write(
-        "Upload multiple clips and combine them "
-        "into one longer MP4."
+        "These characters are original Cartoon Studio characters "
+        "designed as recurring personalities."
     )
 
-    uploads = st.file_uploader(
-        "Choose video clips",
+    columns = st.columns(3)
+
+    for i, (name, character) in enumerate(
+        CHARACTERS.items()
+    ):
+
+        with columns[i % 3]:
+
+            st.markdown(
+                f"### {character['accent']} {name}"
+            )
+
+            st.caption(
+                character["tag"]
+            )
+
+            st.write(
+                "🎨 Bold 2D Comedy"
+            )
+
+
+# ============================================================
+# VIDEO JOINER
+# ============================================================
+
+with tabs[3]:
+
+    st.subheader(
+        "🎞️ Turn shorts into a full episode"
+    )
+
+    files = st.file_uploader(
+        "Upload MP4/MOV clips in episode order",
         type=[
             "mp4",
             "mov",
-            "m4v",
-            "webm"
+            "m4v"
         ],
         accept_multiple_files=True
     )
 
-    if uploads:
+    if files:
 
         st.write(
-            f"**{len(uploads)} clips selected**"
+            "### Episode order"
         )
 
-        for i, file in enumerate(
-            uploads,
-            1
-        ):
+        for i, file in enumerate(files, 1):
 
             st.write(
                 f"{i}. {file.name}"
             )
 
         if st.button(
-            "🎬 Join Into Long Video",
+            "🔗 Join Into Long Video",
             type="primary",
             use_container_width=True
         ):
 
             with st.spinner(
-                "Combining videos..."
+                "Assembling full episode..."
             ):
 
-                result, error = join_videos(
-                    uploads
+                output, error = join_videos(
+                    files
                 )
 
-            if result:
+            if output:
 
                 st.session_state.joined = str(
-                    result
+                    output
                 )
 
                 st.success(
-                    "Long video created!"
+                    "Full episode ready!"
                 )
 
             else:
 
                 st.error(
-                    "Could not join the videos."
+                    error or
+                    "Video joining failed."
                 )
 
-                if error:
-
-                    st.code(
-                        error,
-                        language="text"
-                    )
-
-    if st.session_state.get(
-        "joined"
+    if (
+        st.session_state.get("joined")
+        and
+        Path(
+            st.session_state.joined
+        ).exists()
     ):
 
-        path = Path(
+        st.video(
             st.session_state.joined
         )
 
-        if path.exists():
-
-            st.video(
-                str(path)
-            )
-
-            st.download_button(
-                "⬇️ Download Long Video",
-                path.read_bytes(),
-                "long_cartoon.mp4",
-                "video/mp4",
-                use_container_width=True
-            )
+        st.download_button(
+            "⬇️ Download Full Episode",
+            Path(
+                st.session_state.joined
+            ).read_bytes(),
+            "full_episode.mp4",
+            "video/mp4",
+            use_container_width=True
+        )
 
 
 # ============================================================
-# HELP
+# PROJECT
 # ============================================================
 
-with help_tab:
+with tabs[4]:
 
-    st.header(
-        "How V2 works"
+    st.subheader(
+        "📁 Project"
     )
 
-    st.markdown(
-        """
-### 1. Pick your characters
-
-Choose from 12 original cartoon characters.
-
-### 2. Pick a location
-
-Choose a home, school, pharmacy, hospital,
-office, street, restaurant or park.
-
-### 3. Give characters expressions
-
-Each character can be happy, surprised,
-thinking, angry, laughing or neutral.
-
-### 4. Write dialogue
-
-Use:
-
-`Character: dialogue`
-
-Each line becomes a scene.
-
-### 5. Generate
-
-Characters have:
-
-- Body movement
-- Head movement
-- Arm gestures
-- Facial expressions
-- Eye movement
-- Animated mouth movement
-- Character name tags
-- Scene backgrounds
-- Dialogue timing
-
-### 6. Join episodes
-
-Use **Join Videos** to combine multiple short
-cartoons into a longer episode.
-
-### Next upgrade: V2.1
-
-The next stage is the voice engine:
-
-`Script → AI voice → audio timing → lip-sync → final MP4`
-
-That will make characters actually speak
-their dialogue instead of only animating their mouths.
-"""
+    st.json(
+        {
+            "name": st.session_state.project["name"],
+            "style": st.session_state.project["style"],
+            "location": st.session_state.project["location"],
+            "cast": st.session_state.project["cast"],
+            "shots": len(
+                st.session_state.scenes
+            )
+        }
     )
+
+    project_json = json.dumps(
+        {
+            "project":
+                st.session_state.project,
+            "scenes":
+                st.session_state.scenes
+        },
+        indent=2
+    )
+
+    st.download_button(
+        "💾 Save Project JSON",
+        project_json,
+        "cartoon_project_v3.json",
+        "application/json",
+        use_container_width=True
+    )
+
+    uploaded_project = st.file_uploader(
+        "Load a saved project JSON",
+        type=["json"],
+        key="project_loader"
+    )
+
+    if uploaded_project:
+
+        if st.button(
+            "Load Project"
+        ):
+
+            data = json.loads(
+                uploaded_project
+                .read()
+                .decode()
+            )
+
+            st.session_state.project = (
+                data["project"]
+            )
+
+            st.session_state.scenes = (
+                data["scenes"]
+            )
+
+            st.rerun()
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
 
 st.caption(
-    "Cartoon Studio V2.0 • Original characters • Animated 2D scenes"
+    "🎬 Cartoon Studio V3 · "
+    "Original characters · "
+    "Storyboard-first workflow"
 )
