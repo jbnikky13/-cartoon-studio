@@ -1,18 +1,27 @@
-# Cartoon Studio V1.2.1
+# Cartoon Studio V2.0
 
-Streamlit Cloud reliability update.
+Animated 2D cartoon scene generator built with Streamlit.
 
-### Fix
-Uses `imageio-ffmpeg` from Python instead of relying on a system FFmpeg installation. This avoids common Streamlit Cloud FFmpeg/package issues.
+## V2.0 features
 
-### Deploy
-Replace the old `app.py` and `requirements.txt` in GitHub with these files. `packages.txt` can be empty or removed.
-
-Features:
-- 12 original character choices
-- Original urban animated-comedy style
-- Script dialogue parsing
-- Animated 2D scenes with mouth movement
-- Voice-selection UI prepared for TTS
+- 12 original characters
+- Character expressions
+- Body/arm/head movement
+- Animated mouths
+- Multiple locations
+- Dialogue-driven scenes
+- Character voice profiles (UI only in V2.0)
 - MP4 export
 - Short-video joining
+
+## Deployment
+
+Upload `app.py` and `requirements.txt` to the GitHub repository used by Streamlit Community Cloud.
+
+V2.0 uses `imageio-ffmpeg`, so a system FFmpeg package is not required.
+
+## Roadmap
+
+V2.1: AI voice generation and audio-driven lip-sync.
+V2.2: Timeline/editor.
+V2.3: More character poses, camera movement and scene controls.
