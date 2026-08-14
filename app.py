@@ -809,14 +809,18 @@ def draw_rigged_character(
     talking=False,
     look_x=None,
     scale=1.0,
-    style="Bold 2D Comedy"
+    style="Bold 2D Comedy",
+    mouth_frame=None
 ):
+
+    if mouth_frame is None:
+        mouth_frame = frame
 
     character = CHARACTERS[name]
 
     # Breathing
     breath = (
-        2.4 *
+        3.6 *
         math.sin(
             frame / 11.0 + seed
         )
@@ -824,7 +828,7 @@ def draw_rigged_character(
 
     # Body sway
     sway = (
-        3.5 *
+        4.5 *
         math.sin(
             frame / 18.0 +
             seed * 0.7
@@ -1166,21 +1170,34 @@ def draw_rigged_character(
             )
         )
 
-    blink = (
-        (frame + seed * 13) % 79
-    ) in (0, 1, 2)
+    # Slightly irregular blink interval per character
+    # (varies with a slow secondary wave so it doesn't
+    # feel like a metronome over a long video)
+    blink_period = 79 + int(
+        14 * math.sin(frame / 260.0 + seed)
+    )
+
+    blink_phase = (
+        (frame + seed * 13) % blink_period
+    )
+
+    blink = blink_phase in (0, 1, 2, 3)
+    half_blink = blink_phase in (4, 5)
 
     eye_y = head_y - 12
 
-    eye_height = (
-        2
-        if blink
-        else (
-            12
-            if expression == "Surprised"
-            else 8
-        )
+    base_height = (
+        12
+        if expression == "Surprised"
+        else 8
     )
+
+    if blink:
+        eye_height = 1
+    elif half_blink:
+        eye_height = int(base_height * 0.5)
+    else:
+        eye_height = base_height
 
     for eye_x in (
         cx - 22,
@@ -1286,15 +1303,26 @@ def draw_rigged_character(
 
     if talking:
 
+        # Hold each viseme for a few frames instead of
+        # flipping every single frame (~24/sec was too
+        # fast for a natural talking cadence).
+        viseme_hold = 4
+
         shapes = [
-            0, 1, 2, 3, 4,
-            2, 1, 3, 0, 4
+            0, 2, 1, 3, 2, 4,
+            1, 3, 0, 2, 4, 1
         ]
 
-        shape = shapes[
-            frame %
-            len(shapes)
-        ]
+        step = mouth_frame // viseme_hold
+
+        # Every ~6th viseme, hold a closed mouth a beat
+        # longer to simulate a natural word/breath gap.
+        if step % 6 == 5:
+            shape = 0
+        else:
+            shape = shapes[
+                step % len(shapes)
+            ]
 
         if shape == 0:
 
@@ -1526,8 +1554,12 @@ def draw_dialogue_card(
 def render_frame(
     scene,
     project,
-    frame
+    frame,
+    global_frame=None
 ):
+
+    if global_frame is None:
+        global_frame = frame
 
     image = Image.new(
         "RGB",
@@ -1649,7 +1681,7 @@ def render_frame(
         speaker,
         left_x,
         650,
-        frame,
+        global_frame,
         11,
         expression=emotion,
         posture=posture,
@@ -1657,7 +1689,8 @@ def render_frame(
         talking=True,
         look_x=right_x,
         scale=zoom,
-        style=project["style"]
+        style=project["style"],
+        mouth_frame=frame
     )
 
     # ========================================================
@@ -1689,7 +1722,7 @@ def render_frame(
             listener_gesture = "None"
 
         listener_frame = (
-            frame +
+            global_frame +
             (
                 10
                 if frame % 90 > 55
@@ -1710,7 +1743,8 @@ def render_frame(
             talking=False,
             look_x=left_x,
             scale=zoom,
-            style=project["style"]
+            style=project["style"],
+            mouth_frame=frame
         )
 
     # ========================================================
@@ -1815,7 +1849,8 @@ def render_video(
                 render_frame(
                     scene,
                     project,
-                    frame
+                    frame,
+                    global_frame=index
                 ).save(
                     frames_dir /
                     f"frame_{index:07d}.png"
@@ -1876,7 +1911,10 @@ def render_video(
                 "libx264",
 
                 "-preset",
-                "veryfast",
+                "fast",
+
+                "-crf",
+                "18",
 
                 "-pix_fmt",
                 "yuv420p",
