@@ -1,24 +1,23 @@
-# Cartoon Studio V1.1
+# Cartoon Studio V1.2
 
-Beginner-friendly Streamlit web app for creating simple 2D cartoon videos and joining short videos into one longer MP4.
+A beginner-friendly Streamlit app for creating original 2D cartoon videos from scripts and joining short clips into longer videos.
 
-## Deploy to Streamlit Community Cloud
+## Included
 
-Upload these files to your GitHub repository:
-- app.py
-- requirements.txt
-- packages.txt
-- README.md
+- 12 original character choices
+- Multiple cartoon styles, including an original urban animated-comedy style
+- `Character: dialogue` script parsing
+- Animated character motion and mouth movement timed to dialogue
+- Voice-selection UI prepared for a TTS backend
+- MP4 export
+- Short-video joining
 
-`packages.txt` installs FFmpeg, which is required for video creation and joining.
+## Deploy
 
-Then connect the GitHub repository to Streamlit Community Cloud and select `app.py`.
+Upload `app.py`, `requirements.txt`, `packages.txt`, and `README.md` to GitHub.
 
-## Run locally
+In Streamlit Community Cloud, choose the repository and `app.py` as the main file. `packages.txt` installs FFmpeg.
 
-Install FFmpeg and Python dependencies:
+## Important
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
+The current version has voice-selection controls but does not call an external TTS provider yet. The next backend step can connect an AI TTS service to generate spoken audio for each character and mux it into the rendered video.
