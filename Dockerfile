@@ -1,6 +1,7 @@
 # ============================================================
 # CARTOON STUDIO
-# BLENDER 4.3.2 + RENDER-SAFE HEADLESS ENVIRONMENT
+# Blender 4.3.2
+# Render-safe headless software OpenGL
 # ============================================================
 
 FROM python:3.11-slim
@@ -8,16 +9,16 @@ FROM python:3.11-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ------------------------------------------------------------
-# SYSTEM PACKAGES
+# SYSTEM DEPENDENCIES
 # ------------------------------------------------------------
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
-    curl \
     ca-certificates \
     xz-utils \
     ffmpeg \
     xvfb \
+    xauth \
     mesa-utils \
     libgl1 \
     libegl1 \
@@ -43,7 +44,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libwayland-client0 \
     libwayland-egl1 \
     libwayland-cursor0 \
-    libdecor-0-plugin-1-cairo \
     libglib2.0-0 \
     libgomp1 \
     libstdc++6 \
@@ -53,7 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 
 # ------------------------------------------------------------
-# BLENDER 4.3.2
+# BLENDER
 # ------------------------------------------------------------
 
 WORKDIR /opt
@@ -67,49 +67,32 @@ RUN wget -q \
 
 
 # ------------------------------------------------------------
-# VERIFY BLENDER
+# BLENDER VERIFICATION
 # ------------------------------------------------------------
 
 RUN blender --version
 
 
 # ------------------------------------------------------------
-# SOFTWARE GRAPHICS
+# FORCE SOFTWARE OPENGL
 # ------------------------------------------------------------
 
 ENV LIBGL_ALWAYS_SOFTWARE=1
-
 ENV MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
-
 ENV GALLIUM_DRIVER=llvmpipe
-
 ENV LIBGL_DRI3_DISABLE=1
 
-ENV MESA_GL_VERSION_OVERRIDE=3.3
-
-ENV MESA_GLSL_VERSION_OVERRIDE=330
+# Do NOT force an EGL platform.
+# We want Blender to use the X11/GLX context supplied by Xvfb.
 
 
 # ------------------------------------------------------------
-# BLENDER HEADLESS CONFIGURATION
+# BLENDER USER DIRECTORIES
 # ------------------------------------------------------------
 
 ENV BLENDER_USER_CONFIG=/tmp/blender-config
-
 ENV BLENDER_USER_DATAFILES=/tmp/blender-data
-
 ENV BLENDER_USER_SCRIPTS=/tmp/blender-scripts
-
-
-# ------------------------------------------------------------
-# VIRTUAL DISPLAY
-# ------------------------------------------------------------
-
-ENV DISPLAY=:99
-
-ENV SDL_VIDEODRIVER=dummy
-
-ENV SDL_AUDIODRIVER=dummy
 
 
 # ------------------------------------------------------------
@@ -137,35 +120,26 @@ COPY . .
 RUN mkdir -p \
     /app/output \
     /app/projects \
-    /tmp/cartoon_studio \
     /tmp/blender-config \
     /tmp/blender-data \
     /tmp/blender-scripts
 
 
 # ------------------------------------------------------------
-# BLENDER PATH
-# ------------------------------------------------------------
-
-ENV PATH="/opt/blender-4.3.2-linux-x64:${PATH}"
-
-
-# ------------------------------------------------------------
-# RENDER PORT
+# PORT
 # ------------------------------------------------------------
 
 EXPOSE 10000
 
 
 # ============================================================
-# START APPLICATION
+# START
 # ============================================================
 #
-# 1. Start Xvfb virtual display.
-# 2. Give Blender a virtual X11 display.
-# 3. Force software graphics.
-# 4. Start Streamlit.
+# xvfb-run creates a real X11 virtual display with GLX.
+#
+# Blender launched by engine.py inherits DISPLAY.
 #
 # ============================================================
 
-CMD ["sh", "-c", "Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset >/tmp/xvfb.log 2>&1 & sleep 2; export DISPLAY=:99; export LIBGL_ALWAYS_SOFTWARE=1; export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe; exec streamlit run app.py --server.address=0.0.0.0 --server.port=${PORT:-10000} --server.headless=true --browser.gatherUsageStats=false"]
+CMD ["sh", "-c", "exec xvfb-run -a -e /tmp/xvfb-error.log -s '-screen 0 1024x768x24 +extension GLX +render -noreset' streamlit run app.py --server.address=0.0.0.0 --server.port=${PORT:-10000} --server.headless=true --browser.gatherUsageStats=false"]
