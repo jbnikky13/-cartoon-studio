@@ -10,8 +10,15 @@ import math
 import random
 import wave
 import struct
+import asyncio
 import imageio_ffmpeg
 from PIL import Image, ImageDraw, ImageFont
+
+try:
+    import edge_tts
+    EDGE_TTS_AVAILABLE = True
+except ImportError:
+    EDGE_TTS_AVAILABLE = False
 
 
 # ============================================================
@@ -85,6 +92,7 @@ CHARACTERS = {
         "outfit": "hoodie",
         "hair_style": "afro",
         "accent": "★",
+        "tts_voice": "en-US-AriaNeural",
         "voice": "bright"
     },
 
@@ -97,6 +105,7 @@ CHARACTERS = {
         "outfit": "collar_shirt",
         "hair_style": "short",
         "accent": "◇",
+        "tts_voice": "en-US-DavisNeural",
         "voice": "calm"
     },
 
@@ -109,6 +118,7 @@ CHARACTERS = {
         "outfit": "jacket",
         "hair_style": "ponytail",
         "accent": "⚡",
+        "tts_voice": "en-US-JennyNeural",
         "voice": "energetic"
     },
 
@@ -121,6 +131,7 @@ CHARACTERS = {
         "outfit": "vneck",
         "hair_style": "bun",
         "accent": "○",
+        "tts_voice": "en-US-EricNeural",
         "voice": "calm"
     },
 
@@ -133,6 +144,7 @@ CHARACTERS = {
         "outfit": "turtleneck",
         "hair_style": "curly",
         "accent": "●",
+        "tts_voice": "en-US-SaraNeural",
         "voice": "warm"
     },
 
@@ -145,6 +157,7 @@ CHARACTERS = {
         "outfit": "dress",
         "hair_style": "long",
         "accent": "▲",
+        "tts_voice": "en-US-MichelleNeural",
         "voice": "bright"
     },
 
@@ -157,6 +170,7 @@ CHARACTERS = {
         "outfit": "jacket",
         "hair_style": "short",
         "accent": "◎",
+        "tts_voice": "en-US-ChristopherNeural",
         "voice": "dramatic"
     },
 
@@ -169,6 +183,7 @@ CHARACTERS = {
         "outfit": "crew_neck",
         "hair_style": "spiky",
         "accent": "~",
+        "tts_voice": "en-US-BrianNeural",
         "voice": "dry"
     },
 
@@ -181,6 +196,7 @@ CHARACTERS = {
         "outfit": "collar_shirt",
         "hair_style": "bob",
         "accent": "+",
+        "tts_voice": "en-US-NancyNeural",
         "voice": "firm"
     },
 
@@ -193,6 +209,7 @@ CHARACTERS = {
         "outfit": "vneck",
         "hair_style": "bald",
         "accent": "!",
+        "tts_voice": "en-US-TonyNeural",
         "voice": "dramatic"
     },
 
@@ -205,6 +222,7 @@ CHARACTERS = {
         "outfit": "turtleneck",
         "hair_style": "wavy",
         "accent": "◆",
+        "tts_voice": "en-US-JasonNeural",
         "voice": "dramatic"
     },
 
@@ -217,6 +235,7 @@ CHARACTERS = {
         "outfit": "hoodie",
         "hair_style": "pigtails",
         "accent": "?",
+        "tts_voice": "en-US-AshleyNeural",
         "voice": "bright"
     }
 }
@@ -630,6 +649,158 @@ def make_silent_audio(
 
 
 # ============================================================
+# TEXT-TO-SPEECH (edge-tts)
+# ============================================================
+
+def get_media_duration(path):
+    """Read a media file's duration in seconds via ffmpeg's
+    stderr output (avoids needing a separate ffprobe binary)."""
+
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+
+    result = subprocess.run(
+        [ffmpeg, "-i", str(path)],
+        capture_output=True,
+        text=True
+    )
+
+    match = re.search(
+        r"Duration:\s*(\d+):(\d+):(\d+\.\d+)",
+        result.stderr
+    )
+
+    if not match:
+        return None
+
+    hours, minutes, seconds = match.groups()
+
+    return (
+        int(hours) * 3600 +
+        int(minutes) * 60 +
+        float(seconds)
+    )
+
+
+def synthesize_line(text, voice_id, out_path):
+    """Generate a spoken audio clip for one line of dialogue
+    using edge-tts. Returns True on success, False if TTS is
+    unavailable or generation failed (caller should fall back
+    to a silent/estimated-duration segment in that case)."""
+
+    if not EDGE_TTS_AVAILABLE:
+        return False
+
+    if not text or not text.strip():
+        return False
+
+    async def _run():
+        communicate = edge_tts.Communicate(text, voice_id)
+        await communicate.save(str(out_path))
+
+    try:
+
+        loop = asyncio.new_event_loop()
+
+        try:
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(_run())
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+        return (
+            Path(out_path).exists() and
+            Path(out_path).stat().st_size > 0
+        )
+
+    except Exception:
+        return False
+
+
+def pad_audio_to_duration(src_path, target_seconds, out_path):
+    """Pad (or trim) an audio clip so it exactly matches the
+    video duration it needs to sync against."""
+
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+
+            "-i",
+            str(src_path),
+
+            "-af",
+            (
+                "apad=whole_dur=" +
+                f"{target_seconds}"
+            ),
+
+            "-t",
+            str(target_seconds),
+
+            "-ar",
+            "16000",
+
+            "-ac",
+            "1",
+
+            str(out_path)
+        ],
+        capture_output=True,
+        text=True
+    )
+
+
+def concat_audio_clips(clip_paths, out_path):
+    """Stitch per-scene audio clips into one continuous track,
+    in order, using ffmpeg's concat demuxer."""
+
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+
+    list_path = Path(str(out_path) + ".txt")
+
+    with open(list_path, "w") as f:
+
+        for p in clip_paths:
+
+            escaped = str(Path(p).resolve()).replace(
+                "'", "'\\''"
+            )
+
+            f.write(f"file '{escaped}'\n")
+
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+
+            "-f",
+            "concat",
+
+            "-safe",
+            "0",
+
+            "-i",
+            str(list_path),
+
+            "-c",
+            "copy",
+
+            str(out_path)
+        ],
+        capture_output=True,
+        text=True
+    )
+
+    try:
+        list_path.unlink()
+    except Exception:
+        pass
+
+
+# ============================================================
 # BACKGROUND
 # ============================================================
 
@@ -926,6 +1097,7 @@ def draw_rigged_character(
 
     if seated:
 
+        # Seat cushion
         draw.rounded_rectangle(
             [
                 cx - 110,
@@ -939,49 +1111,117 @@ def draw_rigged_character(
             width=4
         )
 
-        draw.line(
-            [
-                cx - 78,
-                ground - 150,
-                cx - 102,
-                ground
-            ],
-            fill=(50, 50, 56),
-            width=10
-        )
+        # Chair legs (front pair only — back pair would be
+        # hidden by the seated character anyway). Thicker
+        # and rounded-off so it doesn't read as a spindly
+        # stool.
+        for leg_x_top, leg_x_bottom in (
+            (cx - 78, cx - 100),
+            (cx + 78, cx + 100)
+        ):
 
-        draw.line(
-            [
-                cx + 78,
-                ground - 150,
-                cx + 102,
-                ground
-            ],
-            fill=(50, 50, 56),
-            width=10
-        )
+            draw.line(
+                [
+                    leg_x_top,
+                    ground - 150,
+                    leg_x_bottom,
+                    ground
+                ],
+                fill=(58, 60, 68),
+                width=14
+            )
 
-        draw.line(
-            [
-                cx - 28,
-                ground - 145,
-                cx - 95,
-                ground - 65
-            ],
-            fill=(48, 48, 54),
-            width=12
-        )
+            draw.ellipse(
+                [
+                    leg_x_top - 8,
+                    ground - 158,
+                    leg_x_top + 8,
+                    ground - 142
+                ],
+                fill=(58, 60, 68)
+            )
 
-        draw.line(
-            [
-                cx + 28,
-                ground - 145,
-                cx + 95,
-                ground - 65
-            ],
-            fill=(48, 48, 54),
-            width=12
-        )
+            # Floor foot cap
+            draw.ellipse(
+                [
+                    leg_x_bottom - 10,
+                    ground - 6,
+                    leg_x_bottom + 10,
+                    ground + 6
+                ],
+                fill=(40, 41, 47)
+            )
+
+        # Character's own legs, bent at the knee — without
+        # these the character looked like a legless torso
+        # perched on the stool.
+        knee_y = ground - 55
+
+        for hip_x, foot_x in (
+            (cx - 26, cx - 34),
+            (cx + 26, cx + 34)
+        ):
+
+            hip_y = ground - 145
+
+            # Thigh
+            draw.line(
+                [
+                    hip_x,
+                    hip_y,
+                    hip_x * 0.4 + foot_x * 0.6,
+                    knee_y
+                ],
+                fill=character["pants"],
+                width=15
+            )
+
+            # Shin
+            draw.line(
+                [
+                    hip_x * 0.4 + foot_x * 0.6,
+                    knee_y,
+                    foot_x,
+                    ground
+                ],
+                fill=character["pants"],
+                width=13
+            )
+
+            # Knee joint
+            draw.ellipse(
+                [
+                    hip_x * 0.4 + foot_x * 0.6 - 7,
+                    knee_y - 7,
+                    hip_x * 0.4 + foot_x * 0.6 + 7,
+                    knee_y + 7
+                ],
+                fill=character["pants"]
+            )
+
+            # Hip joint
+            draw.ellipse(
+                [
+                    hip_x - 7,
+                    hip_y - 7,
+                    hip_x + 7,
+                    hip_y + 7
+                ],
+                fill=character["pants"]
+            )
+
+            # Shoe
+            draw.ellipse(
+                [
+                    foot_x - 13,
+                    ground - 8,
+                    foot_x + 15,
+                    ground + 9
+                ],
+                fill=shade(character["pants"], -0.5),
+                outline=shade(character["pants"], -0.65),
+                width=2
+            )
 
     else:
 
@@ -1444,7 +1684,7 @@ def draw_rigged_character(
     # ========================================================
 
     hs = int(
-        60 * scale
+        66 * scale
     )
 
     head_box = [
@@ -1822,15 +2062,49 @@ def draw_rigged_character(
         cx + 22
     ):
 
+        ex = eye_x + eye_dx
+
+        # Eye white (sclera) — without this the pupil was
+        # just a dark dot floating on skin, which read as
+        # flat/lifeless. This alone does a lot of the work
+        # for making the face feel more alive.
+        if not blink:
+
+            draw.ellipse(
+                [
+                    ex - 12,
+                    eye_y - max(eye_height, 3) - 2,
+                    ex + 12,
+                    eye_y + max(eye_height, 3) + 2
+                ],
+                fill=(250, 250, 248),
+                outline=shade(character["skin"], -0.35),
+                width=1
+            )
+
         draw.ellipse(
             [
-                eye_x - 10 + eye_dx,
+                ex - 9,
                 eye_y - eye_height,
-                eye_x + 10 + eye_dx,
+                ex + 9,
                 eye_y + eye_height
             ],
-            fill=(25, 25, 27)
+            fill=(35, 28, 26)
         )
+
+        # Catchlight — small highlight dot so eyes don't
+        # look dead/glassy. Skipped during blinks.
+        if not blink and not half_blink:
+
+            draw.ellipse(
+                [
+                    ex - 5,
+                    eye_y - eye_height + 1,
+                    ex - 1,
+                    eye_y - eye_height + 5
+                ],
+                fill=(255, 255, 255)
+            )
 
     # ========================================================
     # EYEBROWS
@@ -1951,7 +2225,7 @@ def draw_rigged_character(
                     cx + 18,
                     mouth_y + 8
                 ],
-                fill=(80, 32, 34),
+                fill=(126, 54, 54),
                 width=4
             )
 
@@ -1964,7 +2238,7 @@ def draw_rigged_character(
                     cx + 17,
                     mouth_y + 12
                 ],
-                fill=(82, 27, 32)
+                fill=(158, 68, 66)
             )
 
         elif shape == 2:
@@ -1976,7 +2250,7 @@ def draw_rigged_character(
                     cx + 19,
                     mouth_y + 22
                 ],
-                fill=(82, 27, 32)
+                fill=(158, 68, 66)
             )
 
         elif shape == 3:
@@ -1988,7 +2262,7 @@ def draw_rigged_character(
                     cx + 13,
                     mouth_y + 28
                 ],
-                fill=(82, 27, 32)
+                fill=(158, 68, 66)
             )
 
         else:
@@ -2002,7 +2276,7 @@ def draw_rigged_character(
                 ],
                 0,
                 180,
-                fill=(82, 27, 32),
+                fill=(158, 68, 66),
                 width=5
             )
 
@@ -2017,7 +2291,7 @@ def draw_rigged_character(
             ],
             0,
             180,
-            fill=(82, 27, 32),
+            fill=(158, 68, 66),
             width=6
         )
 
@@ -2030,7 +2304,7 @@ def draw_rigged_character(
                 cx + 14,
                 mouth_y + 27
             ],
-            fill=(82, 27, 32)
+            fill=(158, 68, 66)
         )
 
     elif expression in [
@@ -2047,7 +2321,7 @@ def draw_rigged_character(
             ],
             0,
             180,
-            fill=(82, 27, 32),
+            fill=(158, 68, 66),
             width=5
         )
 
@@ -2062,7 +2336,7 @@ def draw_rigged_character(
             ],
             180,
             360,
-            fill=(82, 27, 32),
+            fill=(158, 68, 66),
             width=5
         )
 
@@ -2427,20 +2701,118 @@ def render_video(
         exist_ok=True
     )
 
+    audio_dir = (
+        ROOT /
+        f"audio_{os.getpid()}"
+    )
+
+    audio_dir.mkdir(
+        exist_ok=True
+    )
+
     output = (
         ROOT /
         f"cartoon_v4_{os.getpid()}.mp4"
     )
 
-    total = sum(
-        max(
-            1,
-            int(
-                float(
-                    scene["duration"]
-                ) * FPS
-            )
+    master_audio = (
+        ROOT /
+        f"master_audio_{os.getpid()}.wav"
+    )
+
+    # ========================================================
+    # PASS 1: synthesize real speech for each line, then size
+    # each scene's frame count to match how long the line
+    # actually takes to speak (falls back to the text-length
+    # heuristic if TTS is unavailable or a line fails).
+    # ========================================================
+
+    scene_audio_paths = []
+
+    for i, scene in enumerate(scenes):
+
+        raw_clip = (
+            audio_dir /
+            f"raw_{i:04d}.mp3"
         )
+
+        character = CHARACTERS.get(
+            scene["speaker"], {}
+        )
+
+        voice_id = character.get(
+            "tts_voice",
+            "en-US-JennyNeural"
+        )
+
+        synth_ok = synthesize_line(
+            scene["dialogue"],
+            voice_id,
+            raw_clip
+        )
+
+        spoken_seconds = None
+
+        if synth_ok:
+
+            spoken_seconds = get_media_duration(
+                raw_clip
+            )
+
+        if spoken_seconds:
+
+            # small pad so the mouth doesn't cut off the
+            # instant audio ends, and so very short lines
+            # still get a readable amount of screen time
+            scene_seconds = max(
+                spoken_seconds + 0.35,
+                1.2
+            )
+
+        else:
+
+            scene_seconds = float(
+                scene["duration"]
+            )
+
+        scene["duration"] = scene_seconds
+
+        scene["frames"] = max(
+            1,
+            int(scene_seconds * FPS)
+        )
+
+        padded_clip = (
+            audio_dir /
+            f"padded_{i:04d}.wav"
+        )
+
+        if synth_ok:
+
+            pad_audio_to_duration(
+                raw_clip,
+                scene_seconds,
+                padded_clip
+            )
+
+        else:
+
+            make_silent_audio(
+                scene_seconds,
+                padded_clip
+            )
+
+        scene_audio_paths.append(
+            padded_clip
+        )
+
+    # ========================================================
+    # PASS 2: render frames now that every scene's true
+    # duration (and therefore global_frame timeline) is known
+    # ========================================================
+
+    total = sum(
+        scene["frames"]
         for scene in scenes
     )
 
@@ -2450,15 +2822,6 @@ def render_video(
     try:
 
         for scene in scenes:
-
-            scene["frames"] = max(
-                1,
-                int(
-                    float(
-                        scene["duration"]
-                    ) * FPS
-                )
-            )
 
             for frame in range(
                 scene["frames"]
@@ -2486,26 +2849,14 @@ def render_video(
                         done / total
                     )
 
+        concat_audio_clips(
+            scene_audio_paths,
+            master_audio
+        )
+
         ffmpeg = (
             imageio_ffmpeg
             .get_ffmpeg_exe()
-        )
-
-        silent = (
-            ROOT /
-            f"silent_{os.getpid()}.wav"
-        )
-
-        duration = sum(
-            float(
-                scene["duration"]
-            )
-            for scene in scenes
-        )
-
-        make_silent_audio(
-            duration,
-            silent
         )
 
         result = subprocess.run(
@@ -2523,7 +2874,7 @@ def render_video(
                 ),
 
                 "-i",
-                str(silent),
+                str(master_audio),
 
                 "-c:v",
                 "libx264",
@@ -2567,8 +2918,13 @@ def render_video(
             ignore_errors=True
         )
 
+        shutil.rmtree(
+            audio_dir,
+            ignore_errors=True
+        )
+
         try:
-            silent.unlink()
+            master_audio.unlink()
         except Exception:
             pass
 
