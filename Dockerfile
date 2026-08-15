@@ -1,7 +1,6 @@
 # ============================================================
-# CARTOON STUDIO — RENDER-SAFE BLENDER CONTAINER
-# Blender 4.3.2 + Python 3.11 + Streamlit
-# Headless/software rendering for Render.com
+# CARTOON STUDIO
+# BLENDER 4.3.2 + RENDER-SAFE HEADLESS ENVIRONMENT
 # ============================================================
 
 FROM python:3.11-slim
@@ -9,8 +8,9 @@ FROM python:3.11-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ------------------------------------------------------------
-# System dependencies
+# SYSTEM PACKAGES
 # ------------------------------------------------------------
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     curl \
@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgles2 \
     libglvnd0 \
     libglu1-mesa \
+    libosmesa6 \
     libx11-6 \
     libx11-xcb1 \
     libxext6 \
@@ -50,80 +51,121 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
+
 # ------------------------------------------------------------
-# Install Blender 4.3.2
+# BLENDER 4.3.2
 # ------------------------------------------------------------
+
 WORKDIR /opt
 
 RUN wget -q \
     https://download.blender.org/release/Blender4.3/blender-4.3.2-linux-x64.tar.xz \
     -O /tmp/blender.tar.xz \
     && tar -xJf /tmp/blender.tar.xz -C /opt \
-    && rm /tmp/blender.tar.xz \
+    && rm -f /tmp/blender.tar.xz \
     && ln -s /opt/blender-4.3.2-linux-x64/blender /usr/local/bin/blender
 
-# Verify Blender installation during image build
+
+# ------------------------------------------------------------
+# VERIFY BLENDER
+# ------------------------------------------------------------
+
 RUN blender --version
 
-# ------------------------------------------------------------
-# Force software rendering
-# ------------------------------------------------------------
-ENV LIBGL_ALWAYS_SOFTWARE=1
-ENV MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
-ENV GALLIUM_DRIVER=llvmpipe
-ENV EGL_PLATFORM=surfaceless
 
-# Blender configuration
+# ------------------------------------------------------------
+# SOFTWARE GRAPHICS
+# ------------------------------------------------------------
+
+ENV LIBGL_ALWAYS_SOFTWARE=1
+
+ENV MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
+
+ENV GALLIUM_DRIVER=llvmpipe
+
+ENV LIBGL_DRI3_DISABLE=1
+
+ENV MESA_GL_VERSION_OVERRIDE=3.3
+
+ENV MESA_GLSL_VERSION_OVERRIDE=330
+
+
+# ------------------------------------------------------------
+# BLENDER HEADLESS CONFIGURATION
+# ------------------------------------------------------------
+
 ENV BLENDER_USER_CONFIG=/tmp/blender-config
+
 ENV BLENDER_USER_DATAFILES=/tmp/blender-data
+
 ENV BLENDER_USER_SCRIPTS=/tmp/blender-scripts
 
-# Prevent GUI/audio-related problems
-ENV SDL_VIDEODRIVER=dummy
-ENV SDL_AUDIODRIVER=dummy
 
-# Virtual display fallback
+# ------------------------------------------------------------
+# VIRTUAL DISPLAY
+# ------------------------------------------------------------
+
 ENV DISPLAY=:99
 
+ENV SDL_VIDEODRIVER=dummy
+
+ENV SDL_AUDIODRIVER=dummy
+
+
 # ------------------------------------------------------------
-# Application
+# APPLICATION
 # ------------------------------------------------------------
+
 WORKDIR /app
 
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+RUN pip install \
+    --no-cache-dir \
+    --upgrade pip \
+    && pip install \
+    --no-cache-dir \
+    -r requirements.txt
 
 COPY . .
 
+
 # ------------------------------------------------------------
-# Required directories
+# DIRECTORIES
 # ------------------------------------------------------------
+
 RUN mkdir -p \
-    /app/projects \
     /app/output \
+    /app/projects \
+    /tmp/cartoon_studio \
     /tmp/blender-config \
     /tmp/blender-data \
     /tmp/blender-scripts
 
+
 # ------------------------------------------------------------
-# Make Blender executable available everywhere
+# BLENDER PATH
 # ------------------------------------------------------------
+
 ENV PATH="/opt/blender-4.3.2-linux-x64:${PATH}"
 
-# ------------------------------------------------------------
-# Render port
-# Render supplies $PORT automatically.
-# ------------------------------------------------------------
-EXPOSE 10000
 
 # ------------------------------------------------------------
-# Start:
-# 1. Create a virtual X display
-# 2. Start Streamlit on Render's PORT
-#
-# Xvfb provides a virtual display as an additional fallback
-# for Blender components that expect an X11 display.
+# RENDER PORT
 # ------------------------------------------------------------
-CMD ["sh", "-c", "Xvfb :99 -screen 0 1280x720x24 -ac >/tmp/xvfb.log 2>&1 & exec streamlit run app.py --server.address=0.0.0.0 --server.port=${PORT:-10000} --server.headless=true --browser.gatherUsageStats=false"]
+
+EXPOSE 10000
+
+
+# ============================================================
+# START APPLICATION
+# ============================================================
+#
+# 1. Start Xvfb virtual display.
+# 2. Give Blender a virtual X11 display.
+# 3. Force software graphics.
+# 4. Start Streamlit.
+#
+# ============================================================
+
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset >/tmp/xvfb.log 2>&1 & sleep 2; export DISPLAY=:99; export LIBGL_ALWAYS_SOFTWARE=1; export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe; exec streamlit run app.py --server.address=0.0.0.0 --server.port=${PORT:-10000} --server.headless=true --browser.gatherUsageStats=false"]
