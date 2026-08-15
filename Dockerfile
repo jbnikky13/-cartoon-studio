@@ -7,7 +7,10 @@ ENV PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y \
     blender \
     ffmpeg \
+    libegl1 \
     libgl1 \
+    libgles2 \
+    libgbm1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -17,6 +20,7 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libfontconfig1 \
     libfreetype6 \
+    libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
