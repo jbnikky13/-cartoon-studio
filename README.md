@@ -1,27 +1,52 @@
-# Cartoon Studio V2.0
+# 🎬 Cartoon Studio — 3D
 
-Animated 2D cartoon scene generator built with Streamlit.
+A Streamlit front end controlling a Blender-based procedural 3D cartoon engine.
 
-## V2.0 features
+## What it does
 
-- 12 original characters
-- Character expressions
-- Body/arm/head movement
-- Animated mouths
-- Multiple locations
-- Dialogue-driven scenes
-- Character voice profiles (UI only in V2.0)
-- MP4 export
-- Short-video joining
+- Original procedural 3D characters: Zuri Spark and Milo Quirk
+- Stable character staging
+- Dialogue-driven animation
+- Procedural talking/lip movement
+- Blinking and simple expressions
+- Gestures such as wave, point, nod and laugh
+- 3D environments
+- Camera and lighting
+- Bottom subtitles synchronized to dialogue timing
+- Optional voice/audio track
+- MP4 rendering
+- `.blend` scene saved beside the MP4
 
-## Deployment
+## Important deployment note
 
-Upload `app.py` and `requirements.txt` to the GitHub repository used by Streamlit Community Cloud.
+Blender is a separate rendering application. `requirements.txt` installs only Streamlit; Blender is not a normal pip dependency.
 
-V2.0 uses `imageio-ffmpeg`, so a system FFmpeg package is not required.
+For local Windows/macOS/Linux use, install Blender and set its executable path in the app sidebar. Blender supports background execution with Python, which is the mechanism used by this project.
 
-## Roadmap
+Streamlit Community Cloud is not enough by itself for this renderer unless you move the Blender worker into a compatible container/server. The current repository is therefore designed first as a real local 3D engine and can later be connected to a remote render worker.
 
-V2.1: AI voice generation and audio-driven lip-sync.
-V2.2: Timeline/editor.
-V2.3: More character poses, camera movement and scene controls.
+## Run
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Then set the Blender executable in the sidebar if `blender` is not on PATH.
+
+## Script format
+
+```text
+Zuri Spark: [wave] Hey Milo!
+Milo Quirk: [nod] Hey Zuri!
+Zuri Spark: [point] Look over there.
+Milo Quirk: [laugh] That's funny!
+```
+
+Supported action tags currently include:
+
+`wave`, `point`, `nod`, `shake`, `laugh`, `surprised`, `walk`, `sit`
+
+## Assets
+
+The repository intentionally does not include commercial/proprietary character models. The included characters are generated procedurally by Blender.
