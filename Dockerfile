@@ -3,10 +3,12 @@ FROM python:3.11-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
+ENV LIBGL_ALWAYS_SOFTWARE=1
 
 RUN apt-get update && apt-get install -y \
     blender \
     ffmpeg \
+    xvfb \
     libegl1 \
     libgl1 \
     libgles2 \
