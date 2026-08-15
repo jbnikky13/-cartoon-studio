@@ -1,15 +1,29 @@
-# blender/engine.py
-# Cartoon Studio 3D Rendering Engine
-# Blender 4.x compatible
+# ============================================================
+# CARTOON STUDIO — LOW MEMORY BLENDER ENGINE
+# ============================================================
 #
-# This file is ONLY Python.
-# Dockerfile commands such as FROM, RUN, COPY, CMD do NOT belong here.
+# Designed for Render instances with ~512 MB RAM.
+#
+# IMPORTANT:
+# - Eevee only
+# - 480x270 internal render
+# - no Cycles
+# - no compositor
+# - no image sequences
+# - one frame at a time
+# - simple geometry
+# - direct FFmpeg encoding
+#
+# Blender 4.x compatible
+# ============================================================
 
 import bpy
-import os
 import sys
+import os
 import math
 import subprocess
+import shutil
+import gc
 from pathlib import Path
 
 
@@ -17,13 +31,25 @@ from pathlib import Path
 # CONFIGURATION
 # ============================================================
 
-BASE_DIR = Path("/app")
+FPS = 24
 
-PROJECT_DIR = BASE_DIR / "projects"
-OUTPUT_DIR = BASE_DIR / "output"
+# Very small working resolution.
+# The final video is later scaled to 720p by FFmpeg.
+WIDTH = 480
+HEIGHT = 270
 
-PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+# Default episode length.
+DEFAULT_FRAMES = 240
+
+OUTPUT_DIR = Path("/app/output")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+OUTPUT = OUTPUT_DIR / "cartoon.mp4"
+
+TMP_DIR = Path("/tmp/cartoon_engine")
+TMP_DIR.mkdir(parents=True, exist_ok=True)
+
+FRAME_FILE = TMP_DIR / "frame.png"
 
 
 # ============================================================
@@ -35,357 +61,502 @@ def log(message):
 
 
 # ============================================================
-# CLEAN SCENE
+# ARGUMENTS
 # ============================================================
 
-def clear_scene():
-    """Remove everything from the current Blender scene."""
+def get_args():
+    """
+    Read arguments after Blender's -- separator.
+
+    Supported:
+
+        --output /app/output/cartoon.mp4
+        --frames 240
+        --fps 24
+    """
+
+    args = sys.argv
+
+    if "--" not in args:
+        return {}
+
+    args = args[args.index("--") + 1:]
+
+    result = {}
+
+    i = 0
+
+    while i < len(args):
+
+        arg = args[i]
+
+        if arg == "--output" and i + 1 < len(args):
+            result["output"] = args[i + 1]
+            i += 2
+            continue
+
+        if arg == "--frames" and i + 1 < len(args):
+            try:
+                result["frames"] = int(args[i + 1])
+            except Exception:
+                pass
+
+            i += 2
+            continue
+
+        if arg == "--fps" and i + 1 < len(args):
+            try:
+                result["fps"] = int(args[i + 1])
+            except Exception:
+                pass
+
+            i += 2
+            continue
+
+        i += 1
+
+    return result
+
+
+ARGS = get_args()
+
+if ARGS.get("output"):
+    OUTPUT = Path(ARGS["output"])
+
+FRAMES = max(
+    1,
+    int(ARGS.get("frames", DEFAULT_FRAMES))
+)
+
+FPS = max(
+    1,
+    int(ARGS.get("fps", FPS))
+)
+
+
+# ============================================================
+# CLEAN BLENDER FILE
+# ============================================================
+
+def clean_scene():
 
     bpy.ops.object.select_all(action="SELECT")
-    bpy.ops.object.delete(use_global=False)
 
-    # Remove unused datablocks
-    for datablocks in (
+    try:
+        bpy.ops.object.delete(
+            use_global=False
+        )
+    except Exception:
+        pass
+
+    # Remove unused datablocks.
+
+    for collection in (
         bpy.data.meshes,
         bpy.data.curves,
         bpy.data.materials,
         bpy.data.cameras,
         bpy.data.lights,
     ):
-        for block in list(datablocks):
-            try:
-                datablocks.remove(block)
-            except Exception:
-                pass
+        try:
+            for item in list(collection):
+                if item.users == 0:
+                    collection.remove(item)
+        except Exception:
+            pass
+
+    gc.collect()
 
 
 # ============================================================
-# MATERIALS
+# MATERIAL
 # ============================================================
 
-def make_material(name, color, roughness=0.65):
+def material(name, color):
+
     mat = bpy.data.materials.get(name)
 
     if mat is None:
         mat = bpy.data.materials.new(name)
 
     mat.diffuse_color = (
-        float(color[0]),
-        float(color[1]),
-        float(color[2]),
-        1.0,
+        color[0],
+        color[1],
+        color[2],
+        1.0
     )
 
-    mat.use_nodes = True
+    # Use simple diffuse material.
+    try:
+        mat.use_nodes = True
 
-    nodes = mat.node_tree.nodes
-    bsdf = nodes.get("Principled BSDF")
+        nodes = mat.node_tree.nodes
 
-    if bsdf:
-        bsdf.inputs["Base Color"].default_value = (
-            float(color[0]),
-            float(color[1]),
-            float(color[2]),
-            1.0,
+        for node in list(nodes):
+            nodes.remove(node)
+
+        output = nodes.new(
+            "ShaderNodeOutputMaterial"
         )
 
-        bsdf.inputs["Roughness"].default_value = roughness
+        diffuse = nodes.new(
+            "ShaderNodeBsdfDiffuse"
+        )
+
+        diffuse.inputs["Color"].default_value = (
+            color[0],
+            color[1],
+            color[2],
+            1.0
+        )
+
+        diffuse.inputs["Roughness"].default_value = 1.0
+
+        mat.node_tree.links.new(
+            diffuse.outputs["BSDF"],
+            output.inputs["Surface"]
+        )
+
+    except Exception:
+        pass
 
     return mat
 
 
 # ============================================================
-# BASIC OBJECT HELPERS
+# BASIC OBJECTS
 # ============================================================
 
-def add_uv_sphere(name, location, scale, material):
-    bpy.ops.mesh.primitive_uv_sphere_add(
-        segments=32,
-        ring_count=16,
-        location=location,
-    )
+def cube(name, location, scale, mat):
 
-    obj = bpy.context.object
-    obj.name = name
-    obj.scale = scale
-
-    bpy.ops.object.transform_apply(
-        location=False,
-        rotation=False,
-        scale=True,
-    )
-
-    if material:
-        obj.data.materials.append(material)
-
-    return obj
-
-
-def add_cube(name, location, scale, material, bevel=0.0):
     bpy.ops.mesh.primitive_cube_add(
-        location=location,
+        size=1,
+        location=location
     )
 
     obj = bpy.context.object
+
     obj.name = name
+
     obj.scale = scale
 
     bpy.ops.object.transform_apply(
         location=False,
         rotation=False,
-        scale=True,
+        scale=True
     )
 
-    if bevel > 0:
-        modifier = obj.modifiers.new(
-            name="Soft Edges",
-            type="BEVEL",
-        )
-        modifier.width = bevel
-        modifier.segments = 3
-
-    if material:
-        obj.data.materials.append(material)
+    obj.data.materials.append(mat)
 
     return obj
 
 
-def add_cylinder(name, location, radius, depth, material):
-    bpy.ops.mesh.primitive_cylinder_add(
-        vertices=32,
-        radius=radius,
-        depth=depth,
-        location=location,
+def sphere(name, location, scale, mat):
+
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        segments=12,
+        ring_count=8,
+        radius=1,
+        location=location
     )
 
     obj = bpy.context.object
+
     obj.name = name
 
-    if material:
-        obj.data.materials.append(material)
+    obj.scale = scale
+
+    bpy.ops.object.transform_apply(
+        location=False,
+        rotation=False,
+        scale=True
+    )
+
+    obj.data.materials.append(mat)
 
     return obj
 
 
 # ============================================================
-# CARTOON CHARACTER
+# CHARACTER
 # ============================================================
 
-def create_character(
-    name,
-    x,
-    y,
-    body_color,
-    hair_color,
-    skin_color,
-):
-    """
-    Creates a simple stylized 3D cartoon character.
+CHARACTER_COLORS = {
+    "Zuri Spark": {
+        "skin": (0.55, 0.32, 0.22),
+        "shirt": (0.90, 0.18, 0.14),
+        "hair": (0.08, 0.04, 0.03),
+    },
 
-    Character parts are parented to an Empty so the whole
-    character can be moved without changing relative positions.
-    """
+    "Milo Quirk": {
+        "skin": (0.70, 0.43, 0.30),
+        "shirt": (0.08, 0.42, 0.68),
+        "hair": (0.12, 0.07, 0.04),
+    },
 
-    root = bpy.data.objects.new(name + "_ROOT", None)
-    bpy.context.collection.objects.link(root)
-    root.location = (x, y, 0)
+    "Kemi Bolt": {
+        "skin": (0.45, 0.27, 0.19),
+        "shirt": (0.95, 0.60, 0.08),
+        "hair": (0.06, 0.04, 0.03),
+    },
 
-    body_mat = make_material(
-        name + "_BODY",
-        body_color,
+    "Tari Reed": {
+        "skin": (0.60, 0.36, 0.26),
+        "shirt": (0.20, 0.65, 0.42),
+        "hair": (0.10, 0.06, 0.05),
+    },
+}
+
+
+def get_character_colors(name):
+
+    if name in CHARACTER_COLORS:
+        return CHARACTER_COLORS[name]
+
+    return {
+        "skin": (0.55, 0.34, 0.24),
+        "shirt": (0.25, 0.45, 0.75),
+        "hair": (0.08, 0.05, 0.04),
+    }
+
+
+def create_character(name, x):
+
+    c = get_character_colors(name)
+
+    skin = material(
+        f"{name}_skin",
+        c["skin"]
     )
 
-    hair_mat = make_material(
-        name + "_HAIR",
-        hair_color,
+    shirt = material(
+        f"{name}_shirt",
+        c["shirt"]
     )
 
-    skin_mat = make_material(
-        name + "_SKIN",
-        skin_color,
+    hair = material(
+        f"{name}_hair",
+        c["hair"]
     )
 
-    shoe_mat = make_material(
-        name + "_SHOES",
-        (0.04, 0.04, 0.05),
-    )
-
-    eye_mat = make_material(
-        name + "_EYES",
-        (0.02, 0.02, 0.02),
+    black = material(
+        f"{name}_black",
+        (0.015, 0.015, 0.02)
     )
 
     # --------------------------------------------------------
-    # BODY
+    # Body
     # --------------------------------------------------------
 
-    body = add_uv_sphere(
-        name + "_BODY",
-        (x, y, 1.35),
-        (0.65, 0.42, 0.9),
-        body_mat,
+    body = cube(
+        f"{name}_body",
+        (x, 0, 1.25),
+        (0.55, 0.32, 0.75),
+        shirt
     )
 
-    body.parent = root
-    body.location = (0, 0, 1.35)
-
     # --------------------------------------------------------
-    # HEAD
+    # Head
     # --------------------------------------------------------
 
-    head = add_uv_sphere(
-        name + "_HEAD",
-        (x, y, 2.65),
-        (0.63, 0.55, 0.65),
-        skin_mat,
+    head = sphere(
+        f"{name}_head",
+        (x, 0, 2.35),
+        (0.62, 0.50, 0.68),
+        skin
     )
 
-    head.parent = root
-    head.location = (0, 0, 2.65)
-
     # --------------------------------------------------------
-    # HAIR
+    # Hair
     # --------------------------------------------------------
 
-    hair = add_uv_sphere(
-        name + "_HAIR",
-        (x, -0.01, 3.05),
-        (0.65, 0.57, 0.35),
-        hair_mat,
+    hair_obj = sphere(
+        f"{name}_hair",
+        (x, -0.01, 2.72),
+        (0.63, 0.51, 0.28),
+        hair
     )
 
-    hair.parent = root
-    hair.location = (0, -0.01, 3.05)
-
     # --------------------------------------------------------
-    # EYES
+    # Eyes
     # --------------------------------------------------------
 
-    left_eye = add_uv_sphere(
-        name + "_LEFT_EYE",
-        (x - 0.22, -0.51, 2.72),
-        (0.075, 0.035, 0.105),
-        eye_mat,
+    eye_l = sphere(
+        f"{name}_eye_l",
+        (x - 0.20, -0.47, 2.40),
+        (0.07, 0.035, 0.09),
+        black
     )
 
-    right_eye = add_uv_sphere(
-        name + "_RIGHT_EYE",
-        (x + 0.22, -0.51, 2.72),
-        (0.075, 0.035, 0.105),
-        eye_mat,
+    eye_r = sphere(
+        f"{name}_eye_r",
+        (x + 0.20, -0.47, 2.40),
+        (0.07, 0.035, 0.09),
+        black
     )
 
-    left_eye.parent = root
-    right_eye.parent = root
-
-    left_eye.location = (-0.22, -0.51, 2.72)
-    right_eye.location = (0.22, -0.51, 2.72)
-
     # --------------------------------------------------------
-    # NOSE
+    # Mouth
     # --------------------------------------------------------
 
-    nose = add_uv_sphere(
-        name + "_NOSE",
-        (x, -0.57, 2.55),
-        (0.075, 0.06, 0.075),
-        skin_mat,
+    mouth = cube(
+        f"{name}_mouth",
+        (x, -0.49, 2.16),
+        (0.18, 0.025, 0.045),
+        black
     )
 
-    nose.parent = root
-    nose.location = (0, -0.57, 2.55)
-
     # --------------------------------------------------------
-    # ARMS
+    # Arms
     # --------------------------------------------------------
 
-    left_arm = add_cylinder(
-        name + "_LEFT_ARM",
-        (x - 0.72, y, 1.4),
-        0.15,
-        1.1,
-        skin_mat,
+    arm_l = cube(
+        f"{name}_arm_l",
+        (x - 0.72, 0, 1.30),
+        (0.18, 0.20, 0.55),
+        shirt
     )
 
-    right_arm = add_cylinder(
-        name + "_RIGHT_ARM",
-        (x + 0.72, y, 1.4),
-        0.15,
-        1.1,
-        skin_mat,
+    arm_r = cube(
+        f"{name}_arm_r",
+        (x + 0.72, 0, 1.30),
+        (0.18, 0.20, 0.55),
+        shirt
     )
-
-    left_arm.rotation_euler[1] = math.radians(90)
-    right_arm.rotation_euler[1] = math.radians(90)
-
-    left_arm.parent = root
-    right_arm.parent = root
-
-    left_arm.location = (-0.72, 0, 1.4)
-    right_arm.location = (0.72, 0, 1.4)
 
     # --------------------------------------------------------
-    # LEGS
+    # Legs
     # --------------------------------------------------------
 
-    left_leg = add_cylinder(
-        name + "_LEFT_LEG",
-        (x - 0.28, y, 0.35),
-        0.18,
-        0.75,
-        shoe_mat,
+    pants = material(
+        f"{name}_pants",
+        (0.08, 0.10, 0.15)
     )
 
-    right_leg = add_cylinder(
-        name + "_RIGHT_LEG",
-        (x + 0.28, y, 0.35),
-        0.18,
-        0.75,
-        shoe_mat,
+    leg_l = cube(
+        f"{name}_leg_l",
+        (x - 0.25, 0, 0.25),
+        (0.18, 0.20, 0.50),
+        pants
     )
 
-    left_leg.parent = root
-    right_leg.parent = root
+    leg_r = cube(
+        f"{name}_leg_r",
+        (x + 0.25, 0, 0.25),
+        (0.18, 0.20, 0.50),
+        pants
+    )
 
-    left_leg.location = (-0.28, 0, 0.35)
-    right_leg.location = (0.28, 0, 0.35)
-
-    return root
+    return {
+        "name": name,
+        "x": x,
+        "head": head,
+        "mouth": mouth,
+        "arm_l": arm_l,
+        "arm_r": arm_r,
+        "eye_l": eye_l,
+        "eye_r": eye_r,
+    }
 
 
 # ============================================================
-# BACKGROUND
+# ANIMATION
 # ============================================================
 
-def create_environment():
-    ground_mat = make_material(
-        "GROUND",
-        (0.12, 0.16, 0.20),
+def animate_character(character, frame, talking=False):
+
+    # Very small animation.
+    # No expensive modifiers or simulations.
+
+    phase = math.sin(
+        frame * 0.18
     )
 
-    wall_mat = make_material(
-        "WALL",
-        (0.08, 0.10, 0.14),
+    # --------------------------------------------------------
+    # Talking mouth
+    # --------------------------------------------------------
+
+    mouth = character["mouth"]
+
+    if talking:
+
+        cycle = frame % 8
+
+        if cycle < 4:
+            mouth.scale.z = 0.045
+        else:
+            mouth.scale.z = 0.10
+
+    else:
+
+        mouth.scale.z = 0.045
+
+    # --------------------------------------------------------
+    # Tiny arm movement
+    # --------------------------------------------------------
+
+    arm_l = character["arm_l"]
+    arm_r = character["arm_r"]
+
+    arm_l.rotation_euler[1] = (
+        phase * 0.04
     )
 
-    # Ground
-    ground = add_cube(
-        "GROUND",
-        (0, 0, -0.12),
-        (8, 5, 0.1),
-        ground_mat,
-        bevel=0.05,
+    arm_r.rotation_euler[1] = (
+        -phase * 0.04
     )
 
-    # Back wall
-    wall = add_cube(
-        "BACK_WALL",
-        (0, 2.0, 4),
-        (8, 0.1, 4),
-        wall_mat,
+
+# ============================================================
+# WORLD
+# ============================================================
+
+def create_world():
+
+    world = bpy.context.scene.world
+
+    if world is None:
+        world = bpy.data.worlds.new(
+            "CartoonWorld"
+        )
+
+        bpy.context.scene.world = world
+
+    world.use_nodes = True
+
+    bg = world.node_tree.nodes.get(
+        "Background"
     )
 
-    return ground, wall
+    if bg:
+
+        bg.inputs["Color"].default_value = (
+            0.025,
+            0.035,
+            0.06,
+            1.0
+        )
+
+        bg.inputs["Strength"].default_value = 0.7
+
+
+# ============================================================
+# FLOOR
+# ============================================================
+
+def create_floor():
+
+    floor_mat = material(
+        "Floor",
+        (0.12, 0.14, 0.18)
+    )
+
+    cube(
+        "Floor",
+        (0, 0, -0.30),
+        (5.5, 3.0, 0.25),
+        floor_mat
+    )
 
 
 # ============================================================
@@ -393,35 +564,52 @@ def create_environment():
 # ============================================================
 
 def create_camera():
+
     bpy.ops.object.camera_add(
-        location=(0, -11, 3.2)
+        location=(0, -9.0, 3.0)
     )
 
     camera = bpy.context.object
-    camera.name = "MAIN_CAMERA"
+
+    camera.name = "CartoonCamera"
+
+    # Point toward the characters.
+
+    target = (
+        0,
+        0,
+        1.55
+    )
+
+    direction = (
+        target[0] - camera.location.x,
+        target[1] - camera.location.y,
+        target[2] - camera.location.z
+    )
+
+    camera.rotation_euler = direction_to_rotation(
+        direction
+    )
+
+    camera.data.type = "ORTHO"
+
+    camera.data.ortho_scale = 6.2
 
     bpy.context.scene.camera = camera
 
-    camera.data.lens = 48
-
-    # Point camera at scene
-    target = bpy.data.objects.new(
-        "CAMERA_TARGET",
-        None,
-    )
-
-    bpy.context.collection.objects.link(target)
-    target.location = (0, 0, 1.7)
-
-    constraint = camera.constraints.new(
-        type="TRACK_TO"
-    )
-
-    constraint.target = target
-    constraint.track_axis = "TRACK_NEGATIVE_Z"
-    constraint.up_axis = "UP_Y"
-
     return camera
+
+
+def direction_to_rotation(direction):
+
+    import mathutils
+
+    vec = mathutils.Vector(direction)
+
+    return vec.to_track_quat(
+        "-Z",
+        "Y"
+    ).to_euler()
 
 
 # ============================================================
@@ -429,67 +617,51 @@ def create_camera():
 # ============================================================
 
 def create_lighting():
-    # Main soft light
+
+    # One tiny area light.
+    # Avoid multiple lights.
+
     bpy.ops.object.light_add(
         type="AREA",
-        location=(-4, -5, 7),
+        location=(0, -4, 6)
     )
 
-    key = bpy.context.object
-    key.name = "KEY_LIGHT"
-    key.data.energy = 900
-    key.data.shape = "DISK"
-    key.data.size = 5
+    light = bpy.context.object
 
-    key.rotation_euler = (
+    light.data.energy = 350
+
+    light.data.shape = "DISK"
+
+    light.data.size = 5
+
+    light.rotation_euler = (
         math.radians(25),
         0,
-        math.radians(-30),
+        0
     )
-
-    # Fill light
-    bpy.ops.object.light_add(
-        type="AREA",
-        location=(4, -3, 5),
-    )
-
-    fill = bpy.context.object
-    fill.name = "FILL_LIGHT"
-    fill.data.energy = 500
-    fill.data.size = 4
-
-    # Back light
-    bpy.ops.object.light_add(
-        type="AREA",
-        location=(0, 3, 6),
-    )
-
-    back = bpy.context.object
-    back.name = "BACK_LIGHT"
-    back.data.energy = 600
-    back.data.size = 3
 
 
 # ============================================================
 # RENDER SETTINGS
 # ============================================================
 
-def configure_render(output_file):
+def configure_render():
+
     scene = bpy.context.scene
 
     # --------------------------------------------------------
     # Resolution
     # --------------------------------------------------------
 
-    scene.render.resolution_x = 1280
-    scene.render.resolution_y = 720
+    scene.render.resolution_x = WIDTH
+    scene.render.resolution_y = HEIGHT
     scene.render.resolution_percentage = 100
 
     # --------------------------------------------------------
-    # Frame rate
+    # FPS
     # --------------------------------------------------------
 
-    scene.render.fps = 24
+    scene.render.fps = FPS
 
     # --------------------------------------------------------
     # Eevee
@@ -498,228 +670,45 @@ def configure_render(output_file):
     try:
         scene.render.engine = "BLENDER_EEVEE_NEXT"
     except Exception:
+
         try:
             scene.render.engine = "BLENDER_EEVEE"
         except Exception:
             pass
 
     # --------------------------------------------------------
+    # Low memory settings
+    # --------------------------------------------------------
+
+    scene.render.image_settings.file_format = "PNG"
+
+    # Don't render transparent images.
+    scene.render.film_transparent = False
+
+    # --------------------------------------------------------
     # Color
     # --------------------------------------------------------
 
     try:
-        scene.view_settings.look = "AgX - Medium High Contrast"
+        scene.view_settings.look = "None"
     except Exception:
         pass
 
     # --------------------------------------------------------
-    # MP4
-    # --------------------------------------------------------
-
-    scene.render.image_settings.file_format = "FFMPEG"
-
-    scene.render.ffmpeg.format = "MPEG4"
-    scene.render.ffmpeg.codec = "H264"
-
-    try:
-        scene.render.ffmpeg.constant_rate_factor = "MEDIUM"
-    except Exception:
-        pass
-
-    scene.render.filepath = str(output_file)
-
-    # --------------------------------------------------------
-    # Avoid GPU/CUDA/OptiX dependencies
+    # Disable expensive features
     # --------------------------------------------------------
 
     try:
-        scene.cycles.device = "CPU"
+        scene.render.use_file_extension = True
     except Exception:
         pass
 
+    # --------------------------------------------------------
+    # Frame range
+    # --------------------------------------------------------
 
-# ============================================================
-# ANIMATION
-# ============================================================
-
-def animate_character(character, start_frame, end_frame):
-    """
-    Subtle animation.
-
-    Characters remain in their assigned positions.
-    They do NOT move around the scene just because they speak.
-    """
-
-    # Keep root at same location
-    original = character.location.copy()
-
-    character.location = original
-    character.keyframe_insert(
-        data_path="location",
-        frame=start_frame,
-    )
-
-    character.location = original
-    character.keyframe_insert(
-        data_path="location",
-        frame=end_frame,
-    )
-
-    # Small natural breathing motion
-    character.scale = (1, 1, 1)
-    character.keyframe_insert(
-        data_path="scale",
-        frame=start_frame,
-    )
-
-    character.scale = (1.015, 1.015, 1.015)
-    character.keyframe_insert(
-        data_path="scale",
-        frame=start_frame + 12,
-    )
-
-    character.scale = (1, 1, 1)
-    character.keyframe_insert(
-        data_path="scale",
-        frame=start_frame + 24,
-    )
-
-    character.scale = (1, 1, 1)
-    character.keyframe_insert(
-        data_path="scale",
-        frame=end_frame,
-    )
-
-
-# ============================================================
-# SIMPLE TALKING ANIMATION
-# ============================================================
-
-def animate_talking(character, start_frame, end_frame):
-    """
-    Very subtle talking motion.
-
-    The character stays in place.
-    """
-
-    if character is None:
-        return
-
-    original_scale = character.scale.copy()
-
-    frame = start_frame
-
-    while frame <= end_frame:
-        character.scale = (
-            1.0,
-            1.0,
-            1.0,
-        )
-
-        character.keyframe_insert(
-            data_path="scale",
-            frame=frame,
-        )
-
-        if frame + 4 <= end_frame:
-            character.scale = (
-                1.01,
-                1.01,
-                1.0,
-            )
-
-            character.keyframe_insert(
-                data_path="scale",
-                frame=frame + 2,
-            )
-
-        frame += 6
-
-    character.scale = original_scale
-
-
-# ============================================================
-# SUBTITLE / TEXT
-# ============================================================
-
-def add_subtitle(text, start_frame, end_frame):
-    """
-    Adds subtitles near the bottom of the camera view.
-
-    Text changes according to the dialogue timing.
-    """
-
-    if not text:
-        return None
-
-    curve = bpy.data.curves.new(
-        name="SubtitleCurve",
-        type="FONT",
-    )
-
-    curve.body = str(text)
-
-    curve.align_x = "CENTER"
-    curve.align_y = "CENTER"
-
-    curve.size = 0.42
-    curve.extrude = 0.01
-
-    text_obj = bpy.data.objects.new(
-        "SUBTITLE",
-        curve,
-    )
-
-    bpy.context.collection.objects.link(text_obj)
-
-    # Place text in front of camera
-    text_obj.location = (
-        0,
-        -0.5,
-        0.35,
-    )
-
-    # Rotate to face camera
-    text_obj.rotation_euler = (
-        math.radians(90),
-        0,
-        0,
-    )
-
-    subtitle_mat = make_material(
-        "SUBTITLE_MATERIAL",
-        (1.0, 1.0, 1.0),
-    )
-
-    text_obj.data.materials.append(
-        subtitle_mat
-    )
-
-    text_obj.hide_render = True
-    text_obj.keyframe_insert(
-        data_path="hide_render",
-        frame=max(1, start_frame - 1),
-    )
-
-    text_obj.hide_render = False
-    text_obj.keyframe_insert(
-        data_path="hide_render",
-        frame=start_frame,
-    )
-
-    text_obj.hide_render = False
-    text_obj.keyframe_insert(
-        data_path="hide_render",
-        frame=end_frame,
-    )
-
-    text_obj.hide_render = True
-    text_obj.keyframe_insert(
-        data_path="hide_render",
-        frame=end_frame + 1,
-    )
-
-    return text_obj
+    scene.frame_start = 1
+    scene.frame_end = FRAMES
 
 
 # ============================================================
@@ -727,200 +716,409 @@ def add_subtitle(text, start_frame, end_frame):
 # ============================================================
 
 def build_scene():
-    log("Building cartoon scene...")
 
-    clear_scene()
+    log("Building lightweight cartoon scene...")
 
-    create_environment()
+    clean_scene()
+
+    create_world()
+
+    create_floor()
 
     create_lighting()
 
-    create_camera()
+    camera = create_camera()
 
-    # --------------------------------------------------------
-    # ZURI
-    # --------------------------------------------------------
+    # Fixed character positions.
+    #
+    # They do NOT move around the scene when speaking.
+    #
 
     zuri = create_character(
-        "Zuri",
-        -1.8,
-        0,
-        body_color=(0.55, 0.20, 0.80),
-        hair_color=(0.08, 0.04, 0.12),
-        skin_color=(0.55, 0.30, 0.18),
+        "Zuri Spark",
+        -1.55
     )
-
-    # --------------------------------------------------------
-    # MILO
-    # --------------------------------------------------------
 
     milo = create_character(
-        "Milo",
-        1.8,
-        0,
-        body_color=(0.10, 0.40, 0.85),
-        hair_color=(0.12, 0.07, 0.03),
-        skin_color=(0.68, 0.40, 0.24),
+        "Milo Quirk",
+        1.55
     )
 
-    # --------------------------------------------------------
-    # Animation
-    # --------------------------------------------------------
-
-    animate_character(
-        zuri,
-        1,
-        240,
-    )
-
-    animate_character(
-        milo,
-        1,
-        240,
-    )
-
-    # Talking motion
-    animate_talking(
-        zuri,
-        1,
-        120,
-    )
-
-    animate_talking(
-        milo,
-        121,
-        240,
-    )
-
-    return zuri, milo
+    return {
+        "camera": camera,
+        "zuri": zuri,
+        "milo": milo,
+    }
 
 
 # ============================================================
-# OPTIONAL AUDIO
+# FFMPEG
 # ============================================================
 
-def add_audio(audio_file):
-    """
-    Adds supplied audio to the Blender scene if available.
-    """
+def find_ffmpeg():
 
-    if not audio_file:
-        return False
+    candidates = [
+        shutil.which("ffmpeg"),
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+    ]
 
-    audio_file = Path(audio_file)
+    for path in candidates:
 
-    if not audio_file.exists():
-        log(f"Audio file not found: {audio_file}")
-        return False
+        if path and os.path.exists(path):
+            return path
 
-    try:
-        scene = bpy.context.scene
+    return None
 
-        if scene.sequence_editor:
-            scene.sequence_editor_clear()
 
-        sequence = scene.sequence_editor_create()
+# ============================================================
+# DIRECT VIDEO PIPE
+# ============================================================
 
-        sound = sequence.sequences.new_sound(
-            name="VOICE_TRACK",
-            filepath=str(audio_file),
-            channel=1,
-            frame_start=1,
-        )
+class VideoEncoder:
 
-        log(f"Audio added: {audio_file}")
+    def __init__(self, output):
 
-        # Automatically extend scene duration
-        if sound.frame_final_duration > 0:
-            scene.frame_end = max(
-                scene.frame_end,
-                int(sound.frame_final_duration) + 1,
+        self.output = str(output)
+
+        ffmpeg = find_ffmpeg()
+
+        if not ffmpeg:
+            raise RuntimeError(
+                "FFmpeg was not found in the Render container."
             )
 
-        return True
+        # ----------------------------------------------------
+        # IMPORTANT
+        #
+        # raw RGB frames are streamed directly into FFmpeg.
+        #
+        # There is NO 240-frame PNG sequence in memory/disk.
+        # ----------------------------------------------------
 
-    except Exception as exc:
-        log(f"Could not add audio: {exc}")
-        return False
+        self.process = subprocess.Popen(
+            [
+                ffmpeg,
+
+                "-y",
+
+                "-f",
+                "rawvideo",
+
+                "-vcodec",
+                "rawvideo",
+
+                "-pix_fmt",
+                "rgb24",
+
+                "-s",
+                f"{WIDTH}x{HEIGHT}",
+
+                "-r",
+                str(FPS),
+
+                "-i",
+                "-",
+
+                "-an",
+
+                "-c:v",
+                "libx264",
+
+                "-preset",
+                "ultrafast",
+
+                "-tune",
+                "animation",
+
+                "-crf",
+                "30",
+
+                "-pix_fmt",
+                "yuv420p",
+
+                "-movflags",
+                "+faststart",
+
+                self.output,
+            ],
+
+            stdin=subprocess.PIPE,
+
+            stdout=subprocess.DEVNULL,
+
+            stderr=subprocess.PIPE
+        )
+
+
+    def write_frame(self):
+
+        scene = bpy.context.scene
+
+        pixels = scene.render.image.pixels
+
+        # Blender gives RGBA float pixels.
+        #
+        # Convert to compact RGB bytes.
+        #
+
+        data = bytearray()
+
+        length = len(pixels)
+
+        for i in range(0, length, 4):
+
+            r = int(
+                max(
+                    0,
+                    min(
+                        255,
+                        pixels[i] * 255
+                    )
+                )
+            )
+
+            g = int(
+                max(
+                    0,
+                    min(
+                        255,
+                        pixels[i + 1] * 255
+                    )
+                )
+            )
+
+            b = int(
+                max(
+                    0,
+                    min(
+                        255,
+                        pixels[i + 2] * 255
+                    )
+                )
+            )
+
+            data.extend(
+                (r, g, b)
+            )
+
+        self.process.stdin.write(data)
+
+
+    def finish(self):
+
+        try:
+
+            self.process.stdin.close()
+
+        except Exception:
+            pass
+
+        stderr = self.process.stderr.read()
+
+        code = self.process.wait()
+
+        if code != 0:
+
+            raise RuntimeError(
+                stderr.decode(
+                    "utf-8",
+                    errors="replace"
+                )[-5000:]
+            )
 
 
 # ============================================================
 # RENDER
 # ============================================================
 
-def render_video(output_file):
-    output_file = Path(output_file)
+def render_scene(scene_objects):
 
-    output_file.parent.mkdir(
-        parents=True,
-        exist_ok=True,
+    log("Starting low-memory Blender render...")
+
+    log(
+        f"Output: {OUTPUT}"
     )
 
-    configure_render(output_file)
+    log(
+        f"Frames: 1 -> {FRAMES}"
+    )
 
-    scene = bpy.context.scene
+    log(
+        f"Internal resolution: "
+        f"{WIDTH}x{HEIGHT}"
+    )
 
-    # --------------------------------------------------------
-    # Render
-    # --------------------------------------------------------
-
-    log("Starting Blender render...")
-    log(f"Output: {output_file}")
-    log(f"Frames: {scene.frame_start} -> {scene.frame_end}")
+    encoder = None
 
     try:
-        bpy.ops.render.render(
-            animation=True,
+
+        encoder = VideoEncoder(
+            OUTPUT
         )
 
-    except Exception as exc:
-        log(f"Blender render failed: {exc}")
-        raise
+        zuri = scene_objects["zuri"]
 
-    # --------------------------------------------------------
-    # Verify output
-    # --------------------------------------------------------
+        milo = scene_objects["milo"]
 
-    if output_file.exists():
-        size = output_file.stat().st_size
+        scene = bpy.context.scene
+
+        for frame in range(
+            1,
+            FRAMES + 1
+        ):
+
+            scene.frame_set(frame)
+
+            # ------------------------------------------------
+            # Speaker changes by scene.
+            #
+            # For this lightweight engine:
+            #
+            # 0-50% = Zuri speaking
+            # 50-100% = Milo speaking
+            #
+            # This keeps the characters stationary.
+            # ------------------------------------------------
+
+            zuri_talking = (
+                frame < FRAMES / 2
+            )
+
+            milo_talking = not zuri_talking
+
+            animate_character(
+                zuri,
+                frame,
+                zuri_talking
+            )
+
+            animate_character(
+                milo,
+                frame,
+                milo_talking
+            )
+
+            # ------------------------------------------------
+            # Render ONE frame only.
+            # ------------------------------------------------
+
+            scene.render.filepath = str(
+                FRAME_FILE
+            )
+
+            bpy.ops.render.render(
+                write_still=False
+            )
+
+            encoder.write_frame()
+
+            # ------------------------------------------------
+            # Explicitly remove render image data.
+            # ------------------------------------------------
+
+            try:
+
+                image = bpy.data.images.get(
+                    "Render Result"
+                )
+
+                if image:
+                    image.buffers_free()
+
+            except Exception:
+                pass
+
+            # ------------------------------------------------
+            # Periodic memory cleanup.
+            # ------------------------------------------------
+
+            if frame % 12 == 0:
+
+                gc.collect()
+
+                percent = (
+                    frame / FRAMES
+                ) * 100
+
+                log(
+                    f"Rendered "
+                    f"{frame}/{FRAMES} "
+                    f"({percent:.0f}%)"
+                )
+
+        encoder.finish()
+
+        encoder = None
 
         log(
-            f"Render completed successfully. "
-            f"File size: {size} bytes"
+            "Blender render completed."
+        )
+
+        if not OUTPUT.exists():
+
+            raise RuntimeError(
+                "Blender finished but "
+                "cartoon.mp4 was not created."
+            )
+
+        size = OUTPUT.stat().st_size
+
+        log(
+            f"MP4 created successfully: "
+            f"{size / 1024 / 1024:.2f} MB"
         )
 
         return True
 
-    log("Blender finished but MP4 was not created.")
+    except Exception as exc:
 
-    return False
+        log(
+            f"Render error: {exc}"
+        )
+
+        if encoder:
+
+            try:
+                encoder.process.kill()
+            except Exception:
+                pass
+
+        return False
 
 
 # ============================================================
-# COMMAND LINE
+# FINAL CLEANUP
 # ============================================================
 
-def get_argument(name, default=None):
-    """
-    Read an argument after Blender's -- separator.
+def cleanup():
 
-    Example:
+    try:
 
-    blender -b --python engine.py -- --output /app/output/video.mp4
-    """
+        if FRAME_FILE.exists():
+            FRAME_FILE.unlink()
 
-    args = sys.argv
+    except Exception:
+        pass
 
-    if "--" not in args:
-        return default
+    try:
 
-    args = args[args.index("--") + 1:]
+        if TMP_DIR.exists():
 
-    for i, arg in enumerate(args):
-        if arg == name and i + 1 < len(args):
-            return args[i + 1]
+            for item in TMP_DIR.iterdir():
 
-    return default
+                try:
+
+                    if item.is_file():
+                        item.unlink()
+
+                except Exception:
+                    pass
+
+    except Exception:
+        pass
+
+    gc.collect()
 
 
 # ============================================================
@@ -928,73 +1126,70 @@ def get_argument(name, default=None):
 # ============================================================
 
 def main():
+
     log("==========================================")
     log(" Cartoon Studio Blender Engine")
-    log(" Blender 4.x")
+    log(" Low-Memory Blender 4.x")
+    log(" Render-safe configuration")
     log("==========================================")
 
-    output_file = get_argument(
-        "--output",
-        str(OUTPUT_DIR / "cartoon.mp4"),
-    )
-
-    audio_file = get_argument(
-        "--audio",
-        None,
-    )
-
-    duration = get_argument(
-        "--duration",
-        "10",
-    )
-
     try:
-        duration = float(duration)
-    except Exception:
-        duration = 10.0
 
-    # Build scene
-    build_scene()
+        objects = build_scene()
 
-    # Set duration
-    scene = bpy.context.scene
-
-    scene.frame_start = 1
-
-    scene.frame_end = max(
-        24,
-        int(duration * scene.render.fps),
-    )
-
-    # Add audio if supplied
-    if audio_file:
-        add_audio(audio_file)
-
-    # Render
-    success = render_video(
-        output_file,
-    )
-
-    if success:
-        log("==========================================")
-        log(" RENDER SUCCESS")
-        log(f" MP4: {output_file}")
-        log("==========================================")
-    else:
-        log("==========================================")
-        log(" RENDER FAILED")
-        log(" No MP4 was created.")
-        log("==========================================")
-
-        # Do not hide the failure from Render
-        raise RuntimeError(
-            "Blender finished but the MP4 was not created."
+        success = render_scene(
+            objects
         )
 
+        if not success:
 
-# ============================================================
-# ENTRY POINT
-# ============================================================
+            log(
+                "Blender render failed."
+            )
+
+            return 1
+
+        log(
+            "=========================================="
+        )
+
+        log(
+            " CARTOON VIDEO CREATED SUCCESSFULLY"
+        )
+
+        log(
+            f" {OUTPUT}"
+        )
+
+        log(
+            "=========================================="
+        )
+
+        return 0
+
+    except Exception as exc:
+
+        log(
+            f"FATAL ENGINE ERROR: {exc}"
+        )
+
+        return 1
+
+    finally:
+
+        cleanup()
+
 
 if __name__ == "__main__":
-    main()
+
+    exit_code = main()
+
+    try:
+
+        bpy.ops.wm.quit_blender(
+            exit=exit_code
+        )
+
+    except Exception:
+
+        pass
