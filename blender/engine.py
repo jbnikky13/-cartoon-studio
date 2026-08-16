@@ -31,8 +31,8 @@ from mathutils import Vector
 # CONFIGURATION
 # ============================================================
 
-WIDTH = int(os.environ.get("CARTOON_WIDTH", "320"))
-HEIGHT = int(os.environ.get("CARTOON_HEIGHT", "180"))
+WIDTH = int(os.environ.get("CARTOON_WIDTH", "640"))
+HEIGHT = int(os.environ.get("CARTOON_HEIGHT", "360"))
 FPS = int(os.environ.get("CARTOON_FPS", "12"))
 
 # Default = 10 seconds
@@ -51,8 +51,11 @@ OUTPUT_FILE = os.environ.get(
 
 TEMP_DIR = "/tmp/cartoon_blender"
 
-# Keep memory extremely low.
-SAMPLES = 1
+# Cycles sample count. Higher = less noise but slower. 1 sample
+# (the old value) produces very visible speckled noise on CPU
+# Cycles — 24 with denoising on is a much better tradeoff for a
+# small, flat-shaded cartoon character.
+SAMPLES = int(os.environ.get("CARTOON_SAMPLES", "24"))
 
 
 # ============================================================
@@ -315,8 +318,13 @@ def create_character(
         arm_material
     )
 
-    left_arm.rotation_euler[1] = math.radians(90)
-    right_arm.rotation_euler[1] = math.radians(90)
+    # Rest pose: arms hanging naturally at the sides, not
+    # straight out horizontal. A full 90-degree horizontal
+    # rotation put both arms in a stiff "T-pose" for the whole
+    # video, which read as robotic/unsettling rather than a
+    # character at rest.
+    left_arm.rotation_euler[1] = math.radians(12)
+    right_arm.rotation_euler[1] = math.radians(-12)
 
     # -----------------------------
     # LEGS
@@ -329,15 +337,15 @@ def create_character(
 
     left_leg = add_cube(
         f"{name}_LeftLeg",
-        (x - 0.18, 0, 0.48),
-        (0.13, 0.15, 0.40),
+        (x - 0.18, 0, 0.52),
+        (0.16, 0.18, 1.04),
         leg_material
     )
 
     right_leg = add_cube(
         f"{name}_RightLeg",
-        (x + 0.18, 0, 0.48),
-        (0.13, 0.15, 0.40),
+        (x + 0.18, 0, 0.52),
+        (0.16, 0.18, 1.04),
         leg_material
     )
 
@@ -364,7 +372,7 @@ def create_background():
 
     floor_material = make_material(
         "FloorMaterial",
-        (0.12, 0.16, 0.20, 1)
+        (0.22, 0.24, 0.27, 1)
     )
 
     wall_material = make_material(
@@ -461,9 +469,7 @@ def animate_character(character, start_frame, end_frame):
     head = character["head"]
     left_arm = character["left_arm"]
     right_arm = character["right_arm"]
-
-    # Small idle movement.
-    # Very cheap animation.
+    mouth = character["mouth"]
 
     mid = (start_frame + end_frame) // 2
 
@@ -503,24 +509,70 @@ def animate_character(character, start_frame, end_frame):
         frame=end_frame
     )
 
-    # Gentle arm movement.
-    left_arm.rotation_euler[1] = math.radians(90)
-    left_arm.keyframe_insert(
-        data_path="rotation_euler",
-        frame=start_frame
+    # Arm movement — both arms now actually animate (previously
+    # the right arm had zero keyframes and just stayed frozen in
+    # its T-pose start position for the entire video). Swing from
+    # the relaxed rest pose to a slightly raised "talking" gesture
+    # and back, offset between the two arms so the motion doesn't
+    # look perfectly symmetrical/robotic.
+    rest_l = math.radians(12)
+    rest_r = math.radians(-12)
+    raised_l = math.radians(38)
+    raised_r = math.radians(-30)
+
+    quarter = start_frame + (end_frame - start_frame) // 4
+    three_quarter = start_frame + (end_frame - start_frame) * 3 // 4
+
+    for arm, rest, raised, frames in (
+        (
+            left_arm, rest_l, raised_l,
+            (start_frame, quarter, mid, three_quarter, end_frame)
+        ),
+        (
+            right_arm, rest_r, raised_r,
+            (start_frame, three_quarter, mid, quarter, end_frame)
+        ),
+    ):
+
+        f0, f1, f2, f3, f4 = frames
+
+        for frame, angle in (
+            (f0, rest),
+            (f1, raised),
+            (f2, rest),
+            (f3, raised),
+            (f4, rest),
+        ):
+
+            arm.rotation_euler[1] = angle
+            arm.keyframe_insert(
+                data_path="rotation_euler",
+                index=1,
+                frame=frame
+            )
+
+    # Simple mouth open/close cycle so the character doesn't sit
+    # there with a static frozen mouth the whole time — cheap
+    # approximation of talking, not true lip sync.
+    base_scale = mouth.scale.copy()
+    open_scale = (
+        base_scale[0],
+        base_scale[1],
+        base_scale[2] * 2.4
     )
 
-    left_arm.rotation_euler[1] = math.radians(80)
-    left_arm.keyframe_insert(
-        data_path="rotation_euler",
-        frame=mid
-    )
+    step = max(1, (end_frame - start_frame) // 8)
 
-    left_arm.rotation_euler[1] = math.radians(90)
-    left_arm.keyframe_insert(
-        data_path="rotation_euler",
-        frame=end_frame
-    )
+    for i, frame in enumerate(
+        range(start_frame, end_frame + 1, step)
+    ):
+
+        mouth.scale = open_scale if i % 2 == 0 else base_scale
+
+        mouth.keyframe_insert(
+            data_path="scale",
+            frame=frame
+        )
 
 
 # ============================================================
@@ -580,7 +632,7 @@ def build_scene():
     # to stop early once it's "clean enough" for a small, low-detail
     # cartoon character — full photoreal sample counts (4096+) would
     # make even a short clip take hours on CPU-only rendering.
-    scene.cycles.samples = 32
+    scene.cycles.samples = SAMPLES
     scene.cycles.use_adaptive_sampling = True
     scene.cycles.adaptive_threshold = 0.05
     scene.cycles.use_denoising = True
@@ -613,8 +665,12 @@ def build_scene():
     scene.render.ffmpeg.format = "MPEG4"
     scene.render.ffmpeg.codec = "H264"
 
-    # Very low bitrate to keep output small.
-    scene.render.ffmpeg.constant_rate_factor = "VERYLOW"
+    # "VERYLOW" is Blender's name for its *worst* quality tier
+    # (heavy compression, not "very low compression") — that's
+    # what was producing the ~20kb/s blurry/noisy output. MEDIUM
+    # is a much more reasonable default for something meant to
+    # actually look good to a viewer.
+    scene.render.ffmpeg.constant_rate_factor = "MEDIUM"
 
     scene.render.filepath = OUTPUT_FILE
 
