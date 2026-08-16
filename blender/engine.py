@@ -557,8 +557,33 @@ def build_scene():
     # --------------------------------------------------------
 
     # CPU-only Cycles.
-    # This avoids Workbench/OpenGL viewport rendering.
-    scene.render.engine = "BLENDER_EEVEE_NEXT"
+    # This avoids Workbench/OpenGL/EGL entirely — Render.com's
+    # instances have no GPU, and EEVEE requires a real GPU/OpenGL
+    # context to initialize even in "headless" mode. Cycles on the
+    # CPU device is a fully software raytracer with no GPU/display
+    # dependency at all, so it's the only engine that can actually
+    # run here.
+    scene.render.engine = "CYCLES"
+    scene.cycles.device = "CPU"
+
+    # Make sure Blender doesn't even try to probe for a GPU compute
+    # device (some containers report a "device" that then fails to
+    # initialize instead of cleanly falling back).
+    prefs = bpy.context.preferences.addons["cycles"].preferences
+    prefs.compute_device_type = "NONE"
+
+    for device in prefs.devices:
+        device.use = False
+
+    # Cycles is a real raytracer, unlike EEVEE, so unbounded sample
+    # counts get slow fast. Keep this low + use the noise threshold
+    # to stop early once it's "clean enough" for a small, low-detail
+    # cartoon character — full photoreal sample counts (4096+) would
+    # make even a short clip take hours on CPU-only rendering.
+    scene.cycles.samples = 32
+    scene.cycles.use_adaptive_sampling = True
+    scene.cycles.adaptive_threshold = 0.05
+    scene.cycles.use_denoising = True
 
     # --------------------------------------------------------
     # RESOLUTION
