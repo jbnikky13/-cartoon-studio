@@ -1,99 +1,61 @@
 # ============================================================
 # CARTOON STUDIO
-# Blender 4.3.2
-# Render-safe headless software OpenGL
+# Render-safe Streamlit + Blender container
 # ============================================================
 
 FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
 
 # ------------------------------------------------------------
 # SYSTEM DEPENDENCIES
 # ------------------------------------------------------------
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y \
     wget \
+    curl \
     ca-certificates \
     xz-utils \
+    bzip2 \
     ffmpeg \
-    xvfb \
-    xauth \
-    mesa-utils \
     libgl1 \
     libegl1 \
     libgles2 \
-    libglvnd0 \
-    libglu1-mesa \
-    libosmesa6 \
-    libx11-6 \
-    libx11-xcb1 \
-    libxext6 \
-    libxfixes3 \
-    libxi6 \
-    libxrender1 \
-    libxrandr2 \
-    libxkbcommon0 \
-    libxkbcommon-x11-0 \
+    libglib2.0-0 \
     libsm6 \
-    libice6 \
+    libxext6 \
+    libxrender1 \
+    libxi6 \
+    libxxf86vm1 \
+    libxfixes3 \
+    libxkbcommon0 \
     libfontconfig1 \
     libfreetype6 \
     libdbus-1-3 \
-    libnss3 \
+    libharfbuzz0b \
     libwayland-client0 \
     libwayland-egl1 \
-    libwayland-cursor0 \
-    libglib2.0-0 \
-    libgomp1 \
-    libstdc++6 \
-    libgcc-s1 \
-    zlib1g \
+    libdecor-0-0 \
+    mesa-utils \
     && rm -rf /var/lib/apt/lists/*
 
-
 # ------------------------------------------------------------
-# BLENDER
+# BLENDER 4.3.2
 # ------------------------------------------------------------
 
 WORKDIR /opt
 
 RUN wget -q \
     https://download.blender.org/release/Blender4.3/blender-4.3.2-linux-x64.tar.xz \
-    -O /tmp/blender.tar.xz \
-    && tar -xJf /tmp/blender.tar.xz -C /opt \
-    && rm -f /tmp/blender.tar.xz \
+    -O blender.tar.xz \
+    && tar -xf blender.tar.xz \
+    && rm blender.tar.xz \
     && ln -s /opt/blender-4.3.2-linux-x64/blender /usr/local/bin/blender
 
-
-# ------------------------------------------------------------
-# BLENDER VERIFICATION
-# ------------------------------------------------------------
-
+# Verify Blender installation during build
 RUN blender --version
-
-
-# ------------------------------------------------------------
-# FORCE SOFTWARE OPENGL
-# ------------------------------------------------------------
-
-ENV LIBGL_ALWAYS_SOFTWARE=1
-ENV MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
-ENV GALLIUM_DRIVER=llvmpipe
-ENV LIBGL_DRI3_DISABLE=1
-
-# Do NOT force an EGL platform.
-# We want Blender to use the X11/GLX context supplied by Xvfb.
-
-
-# ------------------------------------------------------------
-# BLENDER USER DIRECTORIES
-# ------------------------------------------------------------
-
-ENV BLENDER_USER_CONFIG=/tmp/blender-config
-ENV BLENDER_USER_DATAFILES=/tmp/blender-data
-ENV BLENDER_USER_SCRIPTS=/tmp/blender-scripts
-
 
 # ------------------------------------------------------------
 # APPLICATION
@@ -101,17 +63,12 @@ ENV BLENDER_USER_SCRIPTS=/tmp/blender-scripts
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY requirements.txt /app/requirements.txt
 
-RUN pip install \
-    --no-cache-dir \
-    --upgrade pip \
-    && pip install \
-    --no-cache-dir \
-    -r requirements.txt
+RUN python -m pip install --upgrade pip \
+    && pip install -r /app/requirements.txt
 
-COPY . .
-
+COPY . /app
 
 # ------------------------------------------------------------
 # DIRECTORIES
@@ -119,27 +76,37 @@ COPY . .
 
 RUN mkdir -p \
     /app/output \
-    /app/projects \
-    /tmp/blender-config \
-    /tmp/blender-data \
-    /tmp/blender-scripts
-
+    /app/tmp \
+    /app/uploads
 
 # ------------------------------------------------------------
-# PORT
+# ENVIRONMENT
+# ------------------------------------------------------------
+
+ENV HOME=/tmp
+ENV BLENDER_USER_CONFIG=/tmp/blender-config
+ENV BLENDER_USER_SCRIPTS=/tmp/blender-scripts
+
+# Streamlit configuration
+ENV STREAMLIT_SERVER_HEADLESS=true
+ENV STREAMLIT_SERVER_ENABLE_CORS=false
+ENV STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false
+ENV STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+
+# Render normally supplies PORT=10000.
+# This is only the fallback.
+ENV PORT=10000
+
+# ------------------------------------------------------------
+# RENDER WEB PORT
 # ------------------------------------------------------------
 
 EXPOSE 10000
 
+# ------------------------------------------------------------
+# IMPORTANT:
+# Streamlit is the WEB SERVER.
+# Blender is launched by app.py only when rendering.
+# ------------------------------------------------------------
 
-# ============================================================
-# START
-# ============================================================
-#
-# xvfb-run creates a real X11 virtual display with GLX.
-#
-# Blender launched by engine.py inherits DISPLAY.
-#
-# ============================================================
-
-CMD ["sh", "-c", "exec xvfb-run -a -e /tmp/xvfb-error.log -s '-screen 0 1024x768x24 +extension GLX +render -noreset' streamlit run app.py --server.address=0.0.0.0 --server.port=${PORT:-10000} --server.headless=true --browser.gatherUsageStats=false"]
+CMD ["sh", "-c", "exec streamlit run /app/app.py --server.address=0.0.0.0 --server.port=${PORT:-10000}"]
