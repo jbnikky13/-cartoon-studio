@@ -11,7 +11,33 @@ import random
 import wave
 import struct
 import asyncio
+import gc
+import ctypes
 import imageio_ffmpeg
+
+
+try:
+    _libc = ctypes.CDLL("libc.so.6")
+except Exception:
+    _libc = None
+
+
+def _trim_memory():
+    """Explicitly return freed memory to the OS. Python's own
+    garbage collector only handles reference cycles — it does NOT
+    return freed memory back to the OS; glibc's allocator holds
+    onto it for reuse by default. Over a long frame-rendering loop
+    that retained memory creeps up, and can leave too little
+    headroom for the final ffmpeg subprocess to start on a tightly
+    memory-capped host (e.g. Render's 512MB free tier)."""
+
+    gc.collect()
+
+    if _libc is not None:
+        try:
+            _libc.malloc_trim(0)
+        except Exception:
+            pass
 from PIL import Image, ImageDraw, ImageFont
 
 try:
@@ -2884,6 +2910,12 @@ def render_video(
                 index += 1
                 done += 1
 
+                # Periodically force freed frame memory back to
+                # the OS instead of letting it accumulate over
+                # the course of a long render.
+                if done % 40 == 0:
+                    _trim_memory()
+
                 if (
                     progress_cb
                     and done % 12 == 0
@@ -2892,6 +2924,13 @@ def render_video(
                     progress_cb(
                         done / total
                     )
+
+        # Hard trim right before the final ffmpeg encode/mux —
+        # this is the step that was crashing: by this point in a
+        # long render, Python's process may be holding onto much
+        # more resident memory than it's actively using, leaving
+        # too little headroom for the ffmpeg subprocess to start.
+        _trim_memory()
 
         concat_audio_clips(
             scene_audio_paths,
@@ -2924,10 +2963,10 @@ def render_video(
                 "libx264",
 
                 "-preset",
-                "fast",
+                "veryfast",
 
                 "-crf",
-                "18",
+                "20",
 
                 "-pix_fmt",
                 "yuv420p",
