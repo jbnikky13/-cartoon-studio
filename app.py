@@ -2877,8 +2877,18 @@ def render_video(
         )
 
     # ========================================================
-    # PASS 2: render frames now that every scene's true
-    # duration (and therefore global_frame timeline) is known
+    # PASS 2: render + encode ONE SCENE AT A TIME, deleting each
+    # scene's frame files immediately after encoding it.
+    #
+    # Why: ROOT lives under tempfile.gettempdir() (/tmp), which on
+    # Render (and most containers) is backed by tmpfs — a RAM-based
+    # filesystem. The previous approach wrote every frame for the
+    # ENTIRE video before running ffmpeg once at the end, so peak
+    # memory scaled with total video length. For a long script that
+    # can add up to far more than 512MB even though each individual
+    # frame is small. Encoding scene-by-scene bounds peak usage to
+    # roughly one scene's worth of frames, regardless of how long
+    # the overall video is.
     # ========================================================
 
     total = sum(
@@ -2888,10 +2898,18 @@ def render_video(
 
     done = 0
     index = 0
+    scene_clips = []
+
+    ffmpeg = (
+        imageio_ffmpeg
+        .get_ffmpeg_exe()
+    )
 
     try:
 
-        for scene in scenes:
+        for scene_i, scene in enumerate(scenes):
+
+            scene_start_index = index
 
             for frame in range(
                 scene["frames"]
@@ -2904,17 +2922,12 @@ def render_video(
                     global_frame=index
                 ).save(
                     frames_dir /
-                    f"frame_{index:07d}.png"
+                    f"frame_{index:07d}.png",
+                    compress_level=9
                 )
 
                 index += 1
                 done += 1
-
-                # Periodically force freed frame memory back to
-                # the OS instead of letting it accumulate over
-                # the course of a long render.
-                if done % 40 == 0:
-                    _trim_memory()
 
                 if (
                     progress_cb
@@ -2925,56 +2938,148 @@ def render_video(
                         done / total
                     )
 
-        # Hard trim right before the final ffmpeg encode/mux —
-        # this is the step that was crashing: by this point in a
-        # long render, Python's process may be holding onto much
-        # more resident memory than it's actively using, leaving
-        # too little headroom for the ffmpeg subprocess to start.
-        _trim_memory()
+            # Encode just this scene's frames (silent) —
+            # -start_number tells ffmpeg where this scene's frame
+            # numbering begins within the shared frames_dir.
+            scene_video = (
+                ROOT /
+                f"scene_{os.getpid()}_{scene_i:03d}_v.mp4"
+            )
 
-        concat_audio_clips(
-            scene_audio_paths,
-            master_audio
+            subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+
+                    "-start_number",
+                    str(scene_start_index),
+
+                    "-framerate",
+                    str(FPS),
+
+                    "-i",
+                    str(
+                        frames_dir /
+                        "frame_%07d.png"
+                    ),
+
+                    "-frames:v",
+                    str(scene["frames"]),
+
+                    "-c:v",
+                    "libx264",
+
+                    "-preset",
+                    "veryfast",
+
+                    "-crf",
+                    "20",
+
+                    "-pix_fmt",
+                    "yuv420p",
+
+                    str(scene_video)
+                ],
+                capture_output=True,
+                text=True
+            )
+
+            # Free this scene's frame files immediately — don't
+            # wait until the whole video is done to reclaim this
+            # space, since it's the accumulation across scenes
+            # that was causing the crash.
+            for frame_i in range(
+                scene_start_index, index
+            ):
+
+                try:
+                    (
+                        frames_dir /
+                        f"frame_{frame_i:07d}.png"
+                    ).unlink()
+                except Exception:
+                    pass
+
+            # Mux this scene's audio in now — stream copy only,
+            # no re-encoding, since the video is already encoded.
+            scene_final = (
+                ROOT /
+                f"scene_{os.getpid()}_{scene_i:03d}_final.mp4"
+            )
+
+            subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+
+                    "-i",
+                    str(scene_video),
+
+                    "-i",
+                    str(scene_audio_paths[scene_i]),
+
+                    "-c:v",
+                    "copy",
+
+                    "-c:a",
+                    "aac",
+
+                    "-shortest",
+
+                    str(scene_final)
+                ],
+                capture_output=True,
+                text=True
+            )
+
+            try:
+                scene_video.unlink()
+            except Exception:
+                pass
+
+            scene_clips.append(scene_final)
+
+            _trim_memory()
+
+        # ----------------------------------------------------
+        # Final assembly: stream-copy concat of the already-
+        # encoded per-scene clips. Cheap — no re-encoding, and
+        # each input is a small compressed MP4, not raw frames.
+        # ----------------------------------------------------
+
+        concat_list = (
+            ROOT /
+            f"concat_{os.getpid()}.txt"
         )
 
-        ffmpeg = (
-            imageio_ffmpeg
-            .get_ffmpeg_exe()
-        )
+        with open(concat_list, "w") as f:
+
+            for clip in scene_clips:
+
+                escaped = str(
+                    clip.resolve()
+                ).replace("'", "'\\''")
+
+                f.write(
+                    f"file '{escaped}'\n"
+                )
 
         result = subprocess.run(
             [
                 ffmpeg,
                 "-y",
 
-                "-framerate",
-                str(FPS),
+                "-f",
+                "concat",
+
+                "-safe",
+                "0",
 
                 "-i",
-                str(
-                    frames_dir /
-                    "frame_%07d.png"
-                ),
+                str(concat_list),
 
-                "-i",
-                str(master_audio),
-
-                "-c:v",
-                "libx264",
-
-                "-preset",
-                "veryfast",
-
-                "-crf",
-                "20",
-
-                "-pix_fmt",
-                "yuv420p",
-
-                "-c:a",
-                "aac",
-
-                "-shortest",
+                "-c",
+                "copy",
 
                 "-movflags",
                 "+faststart",
@@ -2984,6 +3089,11 @@ def render_video(
             capture_output=True,
             text=True
         )
+
+        try:
+            concat_list.unlink()
+        except Exception:
+            pass
 
         if result.returncode == 0:
 
@@ -3005,6 +3115,13 @@ def render_video(
             audio_dir,
             ignore_errors=True
         )
+
+        for clip in scene_clips:
+
+            try:
+                clip.unlink()
+            except Exception:
+                pass
 
         try:
             master_audio.unlink()
