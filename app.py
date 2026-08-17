@@ -43,8 +43,10 @@ from PIL import Image, ImageDraw, ImageFont
 try:
     import sprite_renderer as SPRITE
     SPRITE_AVAILABLE = True
-except Exception:
+    SPRITE_IMPORT_ERROR = None
+except Exception as _sprite_import_exc:
     SPRITE_AVAILABLE = False
+    SPRITE_IMPORT_ERROR = str(_sprite_import_exc)
 
 try:
     import edge_tts
@@ -2597,8 +2599,24 @@ def render_frame(
         )
 
     # ========================================================
-    # SPEAKER
+    # SEATING — each character gets a FIXED left/right position
+    # based on their order in the cast list, independent of who's
+    # currently speaking. Previously "speaker" was always drawn at
+    # left_x and "listener" at right_x, which meant characters
+    # visibly swapped sides every time the speaker changed —
+    # jarring and disorienting across a multi-line scene.
     # ========================================================
+
+    left_character = (
+        cast[0] if len(cast) >= 1 else speaker
+    )
+
+    right_character = (
+        cast[1] if len(cast) >= 2
+        else (listener or speaker)
+    )
+
+    left_is_speaking = (left_character == speaker)
 
     # Switch to RGBA here since sprite compositing needs an alpha
     # channel — converted back to RGB right before the frame is
@@ -2610,15 +2628,50 @@ def render_frame(
 
     SPRITE_BASE_SCALE = 0.62
 
-    if SPRITE_AVAILABLE and SPRITE.has_sprite(speaker):
+    if (
+        emotion == "Surprised"
+        and progress < 0.35
+    ):
+        reactive_emotion = "Surprised"
+    else:
+        reactive_emotion = "Neutral"
+
+    if (
+        emotion == "Annoyed"
+        and progress < 0.25
+    ):
+        reactive_gesture = "Nervous"
+    else:
+        reactive_gesture = "None"
+
+    reactive_frame = (
+        global_frame +
+        (
+            10
+            if frame % 90 > 55
+            else 0
+        )
+    )
+
+    # ========================================================
+    # LEFT SEAT
+    # ========================================================
+
+    left_talking = left_is_speaking
+    left_expression = emotion if left_talking else reactive_emotion
+    left_gesture_val = gesture if left_talking else reactive_gesture
+    left_frame_val = global_frame if left_talking else reactive_frame
+    left_seed = 11 if left_character == cast[0] else 23
+
+    if SPRITE_AVAILABLE and SPRITE.has_sprite(left_character):
 
         SPRITE.paste_character(
             image,
-            speaker,
+            left_character,
             (left_x, H - 20),
-            global_frame=global_frame,
-            talking=True,
-            seed=11,
+            global_frame=left_frame_val,
+            talking=left_talking,
+            seed=left_seed,
             scale=SPRITE_BASE_SCALE * zoom
         )
 
@@ -2626,67 +2679,51 @@ def render_frame(
 
         draw_rigged_character(
             draw,
-            speaker,
+            left_character,
             left_x,
             650,
-            global_frame,
-            11,
-            expression=emotion,
+            left_frame_val,
+            left_seed,
+            expression=left_expression,
             posture=posture,
-            gesture=gesture,
-            talking=True,
+            gesture=left_gesture_val,
+            talking=left_talking,
             look_x=right_x,
             scale=zoom,
             style=project["style"],
-            mouth_frame=frame
+            mouth_frame=frame if left_talking else 0
         )
 
     # ========================================================
-    # LISTENER
+    # RIGHT SEAT
     # ========================================================
 
-    if listener:
+    if right_character and right_character != left_character:
 
-        if (
-            emotion == "Surprised"
-            and progress < 0.35
-        ):
+        right_talking = not left_is_speaking
 
-            listener_emotion = "Surprised"
-
-        else:
-
-            listener_emotion = "Neutral"
-
-        if (
-            emotion == "Annoyed"
-            and progress < 0.25
-        ):
-
-            listener_gesture = "Nervous"
-
-        else:
-
-            listener_gesture = "None"
-
-        listener_frame = (
-            global_frame +
-            (
-                10
-                if frame % 90 > 55
-                else 0
-            )
+        right_expression = (
+            emotion if right_talking else reactive_emotion
+        )
+        right_gesture_val = (
+            gesture if right_talking else reactive_gesture
+        )
+        right_frame_val = (
+            global_frame if right_talking else reactive_frame
+        )
+        right_seed = (
+            11 if right_character == cast[0] else 23
         )
 
-        if SPRITE_AVAILABLE and SPRITE.has_sprite(listener):
+        if SPRITE_AVAILABLE and SPRITE.has_sprite(right_character):
 
             SPRITE.paste_character(
                 image,
-                listener,
+                right_character,
                 (right_x, H - 20),
-                global_frame=listener_frame,
-                talking=False,
-                seed=23,
+                global_frame=right_frame_val,
+                talking=right_talking,
+                seed=right_seed,
                 scale=SPRITE_BASE_SCALE * zoom
             )
 
@@ -2694,19 +2731,19 @@ def render_frame(
 
             draw_rigged_character(
                 draw,
-                listener,
+                right_character,
                 right_x,
                 650,
-                listener_frame,
-                23,
-                expression=listener_emotion,
+                right_frame_val,
+                right_seed,
+                expression=right_expression,
                 posture=posture,
-                gesture=listener_gesture,
-                talking=False,
+                gesture=right_gesture_val,
+                talking=right_talking,
                 look_x=left_x,
                 scale=zoom,
                 style=project["style"],
-                mouth_frame=frame
+                mouth_frame=frame if right_talking else 0
             )
 
     # ========================================================
@@ -3308,6 +3345,38 @@ st.caption(
     "Turn a script into a performed 2D cartoon — "
     "characters act, react, move and talk."
 )
+
+# ------------------------------------------------------------
+# Sprite art diagnostic — surfaces loudly instead of silently
+# falling back to shape-drawn characters with no explanation.
+# ------------------------------------------------------------
+
+if not SPRITE_AVAILABLE:
+
+    st.warning(
+        "⚠️ Character art (sprite_renderer.py) isn't loading — "
+        "falling back to basic shape-drawn characters. "
+        f"Import error: `{SPRITE_IMPORT_ERROR}`. "
+        "Check that sprite_renderer.py sits in the same folder "
+        "as app.py in your repo."
+    )
+
+else:
+
+    _missing_sprites = [
+        name for name in CHARACTERS
+        if not SPRITE.has_sprite(name)
+    ]
+
+    if _missing_sprites:
+
+        st.warning(
+            "⚠️ No character art found for: "
+            f"{', '.join(_missing_sprites)}. "
+            "These will render as basic shapes instead. Check "
+            "that char_assets/<name>/head.png exists for each "
+            "in your repo, at the same level as app.py."
+        )
 
 
 # ============================================================
