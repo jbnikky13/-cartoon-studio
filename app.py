@@ -49,6 +49,14 @@ except Exception as _sprite_import_exc:
     SPRITE_IMPORT_ERROR = str(_sprite_import_exc)
 
 try:
+    import explainer_renderer as EXPLAINER
+    EXPLAINER_AVAILABLE = True
+    EXPLAINER_IMPORT_ERROR = None
+except Exception as _explainer_import_exc:
+    EXPLAINER_AVAILABLE = False
+    EXPLAINER_IMPORT_ERROR = str(_explainer_import_exc)
+
+try:
     import edge_tts
     EDGE_TTS_AVAILABLE = True
 except ImportError:
@@ -2626,7 +2634,7 @@ def render_frame(
     image = image.convert("RGBA")
     draw = ImageDraw.Draw(image)
 
-    SPRITE_BASE_SCALE = 0.62
+    SPRITE_BASE_SCALE = 0.34
 
     if (
         emotion == "Surprised"
@@ -2672,7 +2680,8 @@ def render_frame(
             global_frame=left_frame_val,
             talking=left_talking,
             seed=left_seed,
-            scale=SPRITE_BASE_SCALE * zoom
+            scale=SPRITE_BASE_SCALE * zoom,
+            gesture=left_gesture_val
         )
 
     else:
@@ -2724,7 +2733,8 @@ def render_frame(
                 global_frame=right_frame_val,
                 talking=right_talking,
                 seed=right_seed,
-                scale=SPRITE_BASE_SCALE * zoom
+                scale=SPRITE_BASE_SCALE * zoom,
+                gesture=right_gesture_val
             )
 
         else:
@@ -3167,6 +3177,249 @@ def render_video(
 
 
 # ============================================================
+# EXPLAINER / FACELESS VIDEO RENDERER
+# ============================================================
+
+NARRATOR_VOICES = {
+    "Warm / Female": "en-US-JennyNeural",
+    "Deep / Male": "en-US-GuyNeural",
+    "Bright / Female": "en-US-AriaNeural",
+    "Calm / Male": "en-US-DavisNeural",
+}
+
+
+def render_explainer_video(
+    beats,
+    narrator_voice="en-US-JennyNeural",
+    progress_cb=None
+):
+    """
+    beats: list of dicts, each:
+        {"text": "...", "is_stat": False}
+    Mirrors render_video's per-scene-encode-then-concat structure
+    (same reason: /tmp on Render is RAM-backed, so encoding one
+    beat at a time and deleting its frames immediately keeps peak
+    memory bounded regardless of total video length).
+    """
+
+    if not EXPLAINER_AVAILABLE:
+        return None, f"explainer_renderer not available: {EXPLAINER_IMPORT_ERROR}"
+
+    audio_dir = (
+        ROOT /
+        f"explainer_audio_{os.getpid()}"
+    )
+    audio_dir.mkdir(exist_ok=True)
+
+    frames_dir = (
+        ROOT /
+        f"explainer_frames_{os.getpid()}"
+    )
+    frames_dir.mkdir(exist_ok=True)
+
+    output = (
+        ROOT /
+        f"explainer_{os.getpid()}.mp4"
+    )
+
+    ffmpeg = (
+        imageio_ffmpeg
+        .get_ffmpeg_exe()
+    )
+
+    def local_get_font(size, bold):
+        return get_font(size=size, bold=bold)
+
+    # ---- Pass 1: synthesize narration, determine durations ----
+
+    beat_audio = []
+
+    for i, beat in enumerate(beats):
+
+        raw_clip = audio_dir / f"raw_{i:04d}.mp3"
+
+        synth_ok = synthesize_line(
+            beat["text"], narrator_voice, raw_clip
+        )
+
+        duration = (
+            get_media_duration(raw_clip) if synth_ok else None
+        )
+        duration = duration or max(
+            1.5, len(beat["text"].split()) / 2.3
+        )
+        duration += 0.4
+
+        beat_audio.append((raw_clip if synth_ok else None, duration))
+
+    total_frames = sum(
+        max(1, int(d * FPS)) for _, d in beat_audio
+    )
+
+    # ---- Pass 2: render + encode one beat at a time ----
+
+    done = 0
+    scene_clips = []
+
+    try:
+
+        for i, beat in enumerate(beats):
+
+            _, duration = beat_audio[i]
+            n_frames = max(1, int(duration * FPS))
+
+            palette_index = i
+
+            for f in range(n_frames):
+
+                progress = f / max(1, n_frames - 1)
+
+                img = EXPLAINER.render_explainer_frame(
+                    beat["text"],
+                    progress,
+                    global_frame=f,
+                    palette_index=palette_index,
+                    get_font_fn=local_get_font,
+                    is_stat=beat.get("is_stat", False)
+                )
+
+                img.save(
+                    frames_dir / f"frame_{f:07d}.png",
+                    compress_level=9
+                )
+
+                done += 1
+
+                if progress_cb and done % 12 == 0:
+                    progress_cb(done / total_frames)
+
+            scene_video = (
+                ROOT / f"ebeat_{os.getpid()}_{i:03d}_v.mp4"
+            )
+
+            subprocess.run(
+                [
+                    ffmpeg, "-y",
+                    "-framerate", str(FPS),
+                    "-i", str(frames_dir / "frame_%07d.png"),
+                    "-frames:v", str(n_frames),
+                    "-c:v", "libx264",
+                    "-preset", "veryfast",
+                    "-crf", "20",
+                    "-pix_fmt", "yuv420p",
+                    str(scene_video)
+                ],
+                capture_output=True, text=True
+            )
+
+            for f in range(n_frames):
+                try:
+                    (frames_dir / f"frame_{f:07d}.png").unlink()
+                except Exception:
+                    pass
+
+            raw_clip, duration = beat_audio[i]
+            padded_clip = audio_dir / f"padded_{i:04d}.wav"
+
+            if raw_clip:
+
+                subprocess.run(
+                    [
+                        ffmpeg, "-y",
+                        "-i", str(raw_clip),
+                        "-af", f"apad=whole_dur={duration}",
+                        "-t", str(duration),
+                        "-ar", "16000", "-ac", "1",
+                        str(padded_clip)
+                    ],
+                    capture_output=True
+                )
+
+            else:
+
+                subprocess.run(
+                    [
+                        ffmpeg, "-y",
+                        "-f", "lavfi",
+                        "-i", "anullsrc=r=16000:cl=mono",
+                        "-t", str(duration),
+                        str(padded_clip)
+                    ],
+                    capture_output=True
+                )
+
+            scene_final = (
+                ROOT / f"ebeat_{os.getpid()}_{i:03d}_final.mp4"
+            )
+
+            subprocess.run(
+                [
+                    ffmpeg, "-y",
+                    "-i", str(scene_video),
+                    "-i", str(padded_clip),
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-shortest",
+                    str(scene_final)
+                ],
+                capture_output=True, text=True
+            )
+
+            try:
+                scene_video.unlink()
+            except Exception:
+                pass
+
+            scene_clips.append(scene_final)
+
+            _trim_memory()
+
+        concat_list = ROOT / f"econcat_{os.getpid()}.txt"
+
+        with open(concat_list, "w") as f:
+
+            for clip in scene_clips:
+
+                escaped = str(clip.resolve()).replace(
+                    "'", "'\\''"
+                )
+                f.write(f"file '{escaped}'\n")
+
+        result = subprocess.run(
+            [
+                ffmpeg, "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(concat_list),
+                "-c", "copy",
+                "-movflags", "+faststart",
+                str(output)
+            ],
+            capture_output=True, text=True
+        )
+
+        try:
+            concat_list.unlink()
+        except Exception:
+            pass
+
+        if result.returncode == 0:
+            return output, None
+
+        return None, result.stderr[-4000:]
+
+    finally:
+
+        shutil.rmtree(frames_dir, ignore_errors=True)
+        shutil.rmtree(audio_dir, ignore_errors=True)
+
+        for clip in scene_clips:
+            try:
+                clip.unlink()
+            except Exception:
+                pass
+
+
+# ============================================================
 # JOIN VIDEOS
 # ============================================================
 
@@ -3429,9 +3682,156 @@ tabs = st.tabs(
         "🎭 Acting",
         "🎬 Storyboard",
         "🎞️ Join",
-        "💾 Project"
+        "💾 Project",
+        "📊 Explainer"
     ]
 )
+
+
+# ============================================================
+# EXPLAINER TAB — faceless/narrator mode, separate pipeline
+# from the character dialogue mode above. Kinetic captions +
+# animated gradient background + narrator voice-over, no
+# characters or footage required.
+# ============================================================
+
+with tabs[5]:
+
+    st.subheader(
+        "📊 Explainer / Faceless mode"
+    )
+
+    st.caption(
+        "Bold kinetic captions, narrator voice-over, no "
+        "characters — a separate style from the dialogue "
+        "cartoon in the other tabs."
+    )
+
+    if not EXPLAINER_AVAILABLE:
+
+        st.warning(
+            "⚠️ explainer_renderer.py isn't loading. "
+            f"Import error: `{EXPLAINER_IMPORT_ERROR}`. "
+            "Check that explainer_renderer.py sits in the same "
+            "folder as app.py in your repo."
+        )
+
+    else:
+
+        st.markdown(
+            "**Script** — one beat per line. Wrap a line in "
+            "`**stars**` to render it as a big stat/number "
+            "callout instead of flowing text."
+        )
+
+        explainer_script = st.text_area(
+            "Script",
+            height=200,
+            placeholder=(
+                "Water is stranger than you think.\n"
+                "**90%**\n"
+                "of the ocean has never been explored.\n"
+                "And we've mapped more of Mars than our own seafloor."
+            ),
+            label_visibility="collapsed"
+        )
+
+        narrator_label = st.selectbox(
+            "Narrator voice",
+            list(NARRATOR_VOICES.keys())
+        )
+
+        if st.button(
+            "🚀 Render Explainer Video",
+            key="render_explainer_btn"
+        ):
+
+            raw_lines = [
+                line.strip()
+                for line in explainer_script.splitlines()
+                if line.strip()
+            ]
+
+            if not raw_lines:
+
+                st.error(
+                    "Add at least one line of script first."
+                )
+
+            else:
+
+                beats = []
+
+                for line in raw_lines:
+
+                    is_stat = (
+                        line.startswith("**")
+                        and line.endswith("**")
+                        and len(line) > 4
+                    )
+
+                    text = line.strip("*") if is_stat else line
+
+                    beats.append({
+                        "text": text,
+                        "is_stat": is_stat
+                    })
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                def _explainer_progress(pct):
+                    progress_bar.progress(min(1.0, pct))
+                    status_text.text(
+                        f"Rendering... {pct*100:.0f}%"
+                    )
+
+                status_text.text(
+                    "Building explainer video..."
+                )
+
+                voice_id = NARRATOR_VOICES[narrator_label]
+
+                result_path, err = render_explainer_video(
+                    beats,
+                    narrator_voice=voice_id,
+                    progress_cb=_explainer_progress
+                )
+
+                if err:
+
+                    st.error(
+                        f"Render failed: {err}"
+                    )
+
+                elif result_path and Path(result_path).exists():
+
+                    status_text.text("Done!")
+                    progress_bar.progress(1.0)
+
+                    with open(result_path, "rb") as f:
+                        video_bytes = f.read()
+
+                    st.video(video_bytes)
+
+                    st.download_button(
+                        "⬇️ Download Explainer MP4",
+                        data=video_bytes,
+                        file_name="explainer_video.mp4",
+                        mime="video/mp4"
+                    )
+
+                    try:
+                        Path(result_path).unlink()
+                    except Exception:
+                        pass
+
+                else:
+
+                    st.error(
+                        "Render finished, but no video file "
+                        "was produced."
+                    )
 
 
 # ============================================================
