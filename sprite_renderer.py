@@ -1,19 +1,16 @@
 """
-Sprite-based character rendering, using the AI-generated portrait
-crops (head.png per character) as the primary on-screen sprite.
+Sprite-based character rendering, using the AI-generated full-body
+character art (full_body.png per character) as the on-screen sprite.
 
-Why portraits and not full body: the source sheets give a
-straight-on torso view and a 3/4-angle portrait from two different
-"camera angles" in the original generation. Stitching those into one
-full-body figure produces a visible mismatch at the neck. The
-portrait alone is high quality, includes the full face, and
-head-and-shoulders framing is a normal, deliberate choice for a
-dialogue-driven show — not a compromise.
+Earlier versions of this used head-and-shoulders portraits, because
+the original source images had a body crop and a portrait crop from
+two different "camera angles," which didn't stitch together cleanly.
+This version uses purpose-generated full-body art instead (one clean
+image per character, generated directly), so that problem doesn't
+apply anymore — this is a real full body, not a stitch.
 
-Eye/mouth positions below are calibrated against the actual
-generated art (checked across multiple characters), not guessed —
-see the calibration grid images if you need to re-check after
-generating new characters in a different framing.
+Eye/mouth positions below are calibrated against the actual full-body
+art (checked via grid overlay across multiple characters).
 """
 
 from pathlib import Path
@@ -23,7 +20,15 @@ import math
 from PIL import Image, ImageDraw
 
 
-ASSET_DIR = Path("char_assets")
+ASSET_DIR_CANDIDATES = [
+    Path("char_assets"),
+    # Fallback: an earlier upload landed the full-body art in a
+    # folder named this way instead of being merged into
+    # char_assets/ as intended. Checking both means the renderer
+    # keeps working regardless of which naming ended up in the
+    # repo, rather than silently failing if they don't match.
+    Path("char_assets_fullbody"),
+]
 
 CHARACTER_SLUGS = {
     "Zuri Spark": "zuri_spark",
@@ -40,15 +45,26 @@ CHARACTER_SLUGS = {
     "Simi Ray": "simi_ray",
 }
 
-# Calibrated against the actual generated portraits. If you
-# regenerate characters with a noticeably different zoom/framing,
-# recheck these against a couple of samples (see process_sheets.py
-# for a quick grid-overlay snippet).
-EYE_Y_FRAC = 0.415
-MOUTH_Y_FRAC = 0.48
-EYE_L_X_FRAC = 0.22
-EYE_R_X_FRAC = 0.44
-EYE_RADIUS_FRAC = 0.06
+# Calibrated against the actual generated full-body art (checked
+# across multiple characters via grid overlay). If you regenerate
+# characters with a different framing/crop, recheck these.
+EYE_Y_FRAC = 0.145
+MOUTH_Y_FRAC = 0.165
+EYE_L_X_FRAC = 0.38
+EYE_R_X_FRAC = 0.56
+EYE_RADIUS_FRAC = 0.042
+
+
+def _find_sprite_path(slug):
+
+    for base in ASSET_DIR_CANDIDATES:
+
+        candidate = base / slug / "full_body.png"
+
+        if candidate.exists():
+            return candidate
+
+    return None
 
 
 @lru_cache(maxsize=32)
@@ -59,11 +75,18 @@ def load_portrait(character_name):
     if not slug:
         raise ValueError(f"No sprite mapping for {character_name!r}")
 
-    path = ASSET_DIR / slug / "head.png"
+    path = _find_sprite_path(slug)
 
-    if not path.exists():
+    if path is None:
+
+        checked = [
+            str(base / slug / "full_body.png")
+            for base in ASSET_DIR_CANDIDATES
+        ]
+
         raise FileNotFoundError(
-            f"Missing portrait for {character_name}: expected {path}"
+            f"Missing sprite for {character_name}. Checked: "
+            + ", ".join(checked)
         )
 
     return Image.open(path).convert("RGBA")
@@ -76,7 +99,7 @@ def has_sprite(character_name):
     if not slug:
         return False
 
-    return (ASSET_DIR / slug / "head.png").exists()
+    return _find_sprite_path(slug) is not None
 
 
 def make_blink_mask(size, closed_amount):
@@ -127,10 +150,21 @@ def compose_character_frame(
     global_frame,
     talking,
     seed,
-    scale=1.0
+    scale=1.0,
+    gesture="None"
 ):
     """Returns (image, x_offset, y_offset) — the composited sprite
-    for this frame plus the idle-motion offsets to paste it with."""
+    for this frame plus the idle-motion offsets to paste it with.
+
+    gesture: one of the same gesture labels the app already infers
+    from dialogue (Waving, Pointing, Thinking, Shrugging, Laughing,
+    Nervous, Talking Hands, None). Since this is flat full-body art
+    rather than a rigged character, individual limbs can't move —
+    instead each gesture gets a distinct whole-body reaction (tilt,
+    lean, bounce, jitter) so gestures inferred from the dialogue
+    actually show up as *something* instead of being silently
+    dropped, which was happening before this.
+    """
 
     portrait = load_portrait(character_name)
 
@@ -157,6 +191,59 @@ def compose_character_frame(
                 math.sin(global_frame / (viseme_hold * 1.6))
             )
 
+    # ---- gesture-reactive whole-body motion ----
+    extra_x = 0.0
+    extra_y = 0.0
+    rotation = 0.0
+
+    if gesture == "Waving":
+
+        # side-to-side rock, like leaning into an enthusiastic wave
+        rotation = 4.0 * math.sin(global_frame / 4.5 + seed)
+        extra_x = 4.0 * math.sin(global_frame / 4.5 + seed)
+
+    elif gesture == "Pointing":
+
+        # a held forward-ish lean, not oscillating — reads as
+        # someone making a point
+        lean_in = min(1.0, (global_frame % 48) / 8.0)
+        rotation = 3.0 * lean_in
+        extra_x = 3.0 * lean_in
+
+    elif gesture == "Thinking":
+
+        # slow, small head-tilt-like sway, distinctly slower than
+        # idle breathing so it reads as a held pose, not fidgeting
+        rotation = 2.5 * math.sin(global_frame / 22.0 + seed)
+
+    elif gesture == "Shrugging":
+
+        # a shoulder-raise implied via a quick upward bounce that
+        # holds briefly then releases, roughly every couple seconds
+        phase = global_frame % 48
+        if phase < 8:
+            extra_y = -6.0 * math.sin(phase / 8.0 * math.pi)
+
+    elif gesture == "Laughing":
+
+        # quick, loose vertical bounce — bigger and faster than
+        # the idle breathing motion
+        extra_y = -5.0 * abs(
+            math.sin(global_frame / 3.0 + seed)
+        )
+        rotation = 2.0 * math.sin(global_frame / 3.0 + seed)
+
+    elif gesture == "Nervous":
+
+        # small fast side-to-side jitter
+        extra_x = 2.5 * math.sin(global_frame / 2.0 + seed)
+
+    elif gesture == "Talking Hands":
+
+        # a bit more energetic than idle sway, timed to talking
+        # cadence rather than the slow idle wave
+        extra_x = 2.5 * math.sin(global_frame / 6.0 + seed)
+
     if scale != 1.0:
 
         new_size = (
@@ -165,7 +252,22 @@ def compose_character_frame(
         )
         frame_img = frame_img.resize(new_size, Image.LANCZOS)
 
-    return frame_img, int(sway_x), int(breath_y + talk_y)
+    if abs(rotation) > 0.05:
+
+        frame_img = frame_img.rotate(
+            rotation,
+            resample=Image.BICUBIC,
+            expand=False,
+            center=(
+                frame_img.width / 2,
+                frame_img.height * 0.15
+            )
+        )
+
+    total_x = sway_x + extra_x
+    total_y = breath_y + talk_y + extra_y
+
+    return frame_img, int(total_x), int(total_y)
 
 
 def paste_character(
@@ -175,14 +277,16 @@ def paste_character(
     global_frame,
     talking,
     seed,
-    scale=1.0
+    scale=1.0,
+    gesture="None"
 ):
     """anchor_xy: (x, y) on the canvas where the sprite's
     bottom-center should land (e.g. where shoulders meet the
     dialogue framing)."""
 
     sprite_img, x_off, y_off = compose_character_frame(
-        character_name, global_frame, talking, seed, scale
+        character_name, global_frame, talking, seed, scale,
+        gesture=gesture
     )
 
     anchor_x, anchor_y = anchor_xy

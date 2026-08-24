@@ -9,8 +9,19 @@ import tempfile
 import streamlit as st
 from PIL import Image
 
-from realityblend_engine import Character, Scene, load_rgba, remove_simple_background, chroma_key, render_video
+from realityblend_engine import (
+    Character, Scene, load_rgba, remove_simple_background, chroma_key,
+    render_video, render_timeline_video, EDGE_TTS_AVAILABLE
+)
 from realityblend_models import build_timeline
+
+
+NARRATOR_VOICES = {
+    "Bright / Female": "en-US-AriaNeural",
+    "Warm / Female": "en-US-JennyNeural",
+    "Calm / Male": "en-US-DavisNeural",
+    "Deep / Male": "en-US-GuyNeural",
+}
 
 
 def _save_upload(upload, suffix):
@@ -96,8 +107,16 @@ def render_realityblend():
     else:
         width, height = 540, 540
 
+    if not EDGE_TTS_AVAILABLE:
+
+        st.warning(
+            "⚠️ edge-tts isn't installed, so beats will render "
+            "silent. Add `edge-tts>=6.1.12` to requirements_v6.txt."
+        )
+
     st.subheader("5. Character placement")
-    chars = []
+    chars = {}
+    voices = {}
     cols = st.columns(min(3, len(prepared)))
     for i, (name, img) in enumerate(prepared):
         with cols[i % len(cols)]:
@@ -105,23 +124,33 @@ def render_realityblend():
             x = st.slider("X", 0.05, 0.95, min(0.85, 0.28 + i * 0.38), 0.01, key=f"x_{i}")
             y = st.slider("Base/Y", 0.35, 0.98, 0.84, 0.01, key=f"y_{i}")
             scale = st.slider("Size", 0.15, 0.90, 0.55, 0.01, key=f"s_{i}")
-            motion = st.selectbox(
-                "Motion",
-                ["idle", "talk", "bounce", "nervous", "nod", "wave", "point"],
-                index=1 if i == 0 else 0,
-                key=f"m_{i}",
+            voice_label = st.selectbox(
+                "Voice (used when this name speaks in the script)",
+                list(NARRATOR_VOICES.keys()),
+                index=i % len(NARRATOR_VOICES),
+                key=f"v_{i}",
             )
-            chars.append(Character(
-                name=name, image=img, x=x, y=y, scale=scale,
-                z=i + 10, motion=motion, shadow=True
-            ))
+            # display name without extension, so it can match
+            # "Name:" lines in the script naturally
+            char_key = Path(name).stem
+            chars[char_key] = Character(
+                name=char_key, image=img, x=x, y=y, scale=scale,
+                z=i + 10, motion="idle", shadow=True
+            )
+            voices[char_key] = NARRATOR_VOICES[voice_label]
+
+    st.caption(
+        "Tip: name your script lines to match the character names "
+        "above (e.g. if your file is `zuri.png`, write `zuri: ...` "
+        "in the script) so the right voice and \"talk\" motion get "
+        "used for each line."
+    )
 
     st.subheader("6. Generate")
     if st.button("🎬 Render RealityBlend Video", type="primary", use_container_width=True):
         out = Path(tempfile.gettempdir()) / "cartoon_studio_v6_realityblend.mp4"
-        scene = Scene(
+        scene_template = Scene(
             background=bg,
-            duration=duration,
             fps=fps,
             width=width,
             height=height,
@@ -132,8 +161,12 @@ def render_realityblend():
         )
         progress = st.progress(0.0)
         status = st.empty()
+        status.text("Rendering beats (audio + captions + timeline)...")
         try:
-            render_video(scene, chars, out, progress=lambda p: progress.progress(p))
+            render_timeline_video(
+                scene_template, chars, rows, voices, out,
+                progress=lambda p: progress.progress(min(1.0, p))
+            )
             status.success("RealityBlend video created.")
             st.video(str(out))
             st.download_button(

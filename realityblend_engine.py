@@ -7,6 +7,7 @@ and streamed to FFmpeg through stdin.
 """
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 import subprocess
@@ -14,12 +15,192 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 try:
     import imageio_ffmpeg
 except ImportError:
     imageio_ffmpeg = None
+
+try:
+    import edge_tts
+    EDGE_TTS_AVAILABLE = True
+except ImportError:
+    EDGE_TTS_AVAILABLE = False
+
+
+# ============================================================
+# TTS (self-contained — this package deliberately doesn't import
+# from app.py, so a copy of the same proven pattern lives here)
+# ============================================================
+
+def synthesize_line(text, voice_id, out_path):
+
+    if not EDGE_TTS_AVAILABLE or not text or not text.strip():
+        return False
+
+    async def _run():
+        communicate = edge_tts.Communicate(text, voice_id)
+        await communicate.save(str(out_path))
+
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_run())
+        loop.close()
+        return Path(out_path).exists() and Path(out_path).stat().st_size > 0
+    except Exception:
+        return False
+
+
+def get_media_duration(path):
+
+    if imageio_ffmpeg is None:
+        return None
+
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+
+    result = subprocess.run(
+        [ffmpeg, "-i", str(path)],
+        capture_output=True, text=True
+    )
+
+    match = re.search(
+        r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", result.stderr
+    )
+
+    if not match:
+        return None
+
+    h, m, s = match.groups()
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+# ============================================================
+# CAPTIONS
+# ============================================================
+
+def get_safe_font(size=32, bold=True):
+    """Same fallback chain as the main app's get_font — DejaVu,
+    then Liberation, then PIL's built-in default. Don't rely on a
+    font that might not exist on the deployment host."""
+
+    candidates = [
+        (
+            "/usr/share/fonts/truetype/dejavu/"
+            + ("DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf")
+        ),
+        (
+            "/usr/share/fonts/truetype/liberation2/"
+            + (
+                "LiberationSans-Bold.ttf" if bold
+                else "LiberationSans-Regular.ttf"
+            )
+        ),
+    ]
+
+    for path in candidates:
+        if Path(path).exists():
+            return ImageFont.truetype(path, size)
+
+    return ImageFont.load_default()
+
+
+def wrap_caption(text, font, draw, max_width):
+
+    words = text.split()
+    lines = []
+    current = []
+
+    for word in words:
+
+        trial = " ".join(current + [word])
+        bbox = draw.textbbox((0, 0), trial, font=font)
+
+        if bbox[2] - bbox[0] > max_width and current:
+            lines.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+
+    if current:
+        lines.append(" ".join(current))
+
+    return lines
+
+
+def draw_caption(frame, text, speaker=None):
+    """Bottom-aligned subtitle bar — semi-transparent dark
+    background, bold white text with a stroke for legibility
+    against any background photo."""
+
+    if not text:
+        return frame
+
+    frame = frame.convert("RGBA")
+    W, H = frame.size
+
+    font_size = max(18, int(W * 0.045))
+    font = get_safe_font(size=font_size, bold=True)
+
+    draw = ImageDraw.Draw(frame)
+    max_width = int(W * 0.86)
+
+    lines = wrap_caption(text, font, draw, max_width)
+
+    line_height = int(font_size * 1.3)
+    block_height = line_height * len(lines) + int(font_size * 0.8)
+
+    bar_top = H - block_height - int(H * 0.04)
+
+    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+    odraw = ImageDraw.Draw(overlay)
+
+    odraw.rectangle(
+        [0, bar_top, W, H],
+        fill=(0, 0, 0, 130)
+    )
+
+    frame = Image.alpha_composite(frame, overlay)
+    draw = ImageDraw.Draw(frame)
+
+    y = bar_top + int(font_size * 0.4)
+
+    if speaker:
+
+        speaker_font = get_safe_font(
+            size=int(font_size * 0.8), bold=True
+        )
+
+        draw.text(
+            (int(W * 0.07), y),
+            speaker.upper(),
+            font=speaker_font,
+            fill=(255, 210, 90),
+            stroke_width=2,
+            stroke_fill=(0, 0, 0)
+        )
+
+        y += int(font_size * 1.0)
+
+    for line in lines:
+
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_w = bbox[2] - bbox[0]
+        x = (W - line_w) // 2
+
+        draw.text(
+            (x, y),
+            line,
+            font=font,
+            fill=(255, 255, 255),
+            stroke_width=2,
+            stroke_fill=(0, 0, 0)
+        )
+
+        y += line_height
+
+    return frame.convert("RGB")
 
 
 @dataclass
@@ -189,11 +370,15 @@ def paste_character(canvas: Image.Image, char: Character, t: float):
     canvas.alpha_composite(img, (x, y))
 
 
-def render_frame(scene: Scene, characters: Iterable[Character], t: float) -> Image.Image:
+def render_frame(scene: Scene, characters: Iterable[Character], t: float,
+                  caption_text: str = None, caption_speaker: str = None) -> Image.Image:
     bg = camera_background(scene, t).convert("RGBA")
     for char in sorted(characters, key=lambda c: c.z):
         paste_character(bg, char, t)
-    return bg.convert("RGB")
+    frame = bg.convert("RGB")
+    if caption_text:
+        frame = draw_caption(frame, caption_text, caption_speaker)
+    return frame
 
 
 def ffmpeg_exe() -> str:
@@ -203,7 +388,7 @@ def ffmpeg_exe() -> str:
 
 
 def render_video(scene: Scene, characters: Iterable[Character], output_path, audio_path=None,
-                 progress=None) -> Path:
+                 progress=None, caption_text: str = None, caption_speaker: str = None) -> Path:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fps = max(6, min(24, int(scene.fps)))
@@ -233,7 +418,11 @@ def render_video(scene: Scene, characters: Iterable[Character], output_path, aud
         chars = list(characters)
         for i in range(total):
             t = i / fps
-            frame = render_frame(scene, chars, t)
+            frame = render_frame(
+                scene, chars, t,
+                caption_text=caption_text,
+                caption_speaker=caption_speaker
+            )
             proc.stdin.write(frame.tobytes())
             if progress:
                 progress((i + 1) / total)
@@ -250,3 +439,200 @@ def render_video(scene: Scene, characters: Iterable[Character], output_path, aud
     if rc != 0:
         raise RuntimeError("FFmpeg render failed:\n" + stderr[-4000:])
     return output_path
+
+
+def render_timeline_video(
+    scene_template: Scene,
+    characters_by_name: dict,
+    rows,
+    voices_by_name: dict,
+    output_path,
+    default_voice: str = "en-US-JennyNeural",
+    progress=None,
+):
+    """
+    Renders one beat per DialogueLine in `rows` (from
+    realityblend_models.build_timeline): synthesizes that line's
+    audio in the speaking character's voice, gets its REAL duration
+    (not just the word-count estimate), renders that beat's frames
+    with the speaking character on "talk" motion and everyone else
+    on "idle", draws the caption, muxes audio in, then concatenates
+    all beats into the final video.
+
+    characters_by_name: {name: Character}
+    voices_by_name: {name: edge-tts voice id}
+    """
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    work_dir = output_path.parent / f"_rb_beats_{output_path.stem}"
+    work_dir.mkdir(exist_ok=True)
+
+    beat_clips = []
+    total_beats = max(1, len(rows))
+
+    try:
+
+        for i, row in enumerate(rows):
+
+            raw_audio = work_dir / f"raw_{i:04d}.mp3"
+
+            speaker_key = row.speaker.strip().lower()
+            matched_name = None
+
+            for cname in characters_by_name:
+                if cname.strip().lower() == speaker_key:
+                    matched_name = cname
+                    break
+
+            voice_id = voices_by_name.get(
+                matched_name, default_voice
+            ) if matched_name else default_voice
+
+            synth_ok = synthesize_line(row.text, voice_id, raw_audio)
+
+            real_duration = (
+                get_media_duration(raw_audio) if synth_ok else None
+            )
+            beat_duration = (real_duration or row.duration) + 0.3
+
+            beat_chars = []
+
+            for cname, char in characters_by_name.items():
+
+                motion = "talk" if cname == matched_name else "idle"
+
+                beat_chars.append(Character(
+                    name=char.name, image=char.image,
+                    x=char.x, y=char.y, scale=char.scale,
+                    z=char.z, opacity=char.opacity, flip=char.flip,
+                    shadow=char.shadow, motion=motion
+                ))
+
+            beat_scene = Scene(
+                background=scene_template.background,
+                duration=beat_duration,
+                fps=scene_template.fps,
+                width=scene_template.width,
+                height=scene_template.height,
+                camera_zoom=scene_template.camera_zoom,
+                camera_x=scene_template.camera_x,
+                camera_y=scene_template.camera_y,
+                brightness=scene_template.brightness,
+                contrast=scene_template.contrast,
+                saturation=scene_template.saturation,
+            )
+
+            silent_clip = work_dir / f"silent_{i:04d}.mp4"
+
+            def _beat_progress(p, i=i):
+                if progress:
+                    progress((i + p) / total_beats)
+
+            render_video(
+                beat_scene, beat_chars, silent_clip,
+                progress=_beat_progress,
+                caption_text=row.text,
+                caption_speaker=row.speaker if row.speaker != "Narrator" else None
+            )
+
+            final_clip = work_dir / f"final_{i:04d}.mp4"
+            ffmpeg = ffmpeg_exe()
+
+            if synth_ok:
+
+                padded_audio = work_dir / f"padded_{i:04d}.wav"
+
+                subprocess.run(
+                    [
+                        ffmpeg, "-y",
+                        "-i", str(raw_audio),
+                        "-af", f"apad=whole_dur={beat_duration}",
+                        "-t", str(beat_duration),
+                        "-ar", "16000", "-ac", "1",
+                        str(padded_audio)
+                    ],
+                    capture_output=True
+                )
+
+                subprocess.run(
+                    [
+                        ffmpeg, "-y",
+                        "-i", str(silent_clip),
+                        "-i", str(padded_audio),
+                        "-c:v", "copy",
+                        "-c:a", "aac",
+                        "-shortest",
+                        str(final_clip)
+                    ],
+                    capture_output=True
+                )
+
+                try:
+                    padded_audio.unlink()
+                except Exception:
+                    pass
+
+            else:
+
+                final_clip = silent_clip
+
+            try:
+                if final_clip != silent_clip:
+                    silent_clip.unlink()
+            except Exception:
+                pass
+
+            try:
+                raw_audio.unlink()
+            except Exception:
+                pass
+
+            beat_clips.append(final_clip)
+
+        concat_list = work_dir / "concat.txt"
+
+        with open(concat_list, "w") as f:
+            for clip in beat_clips:
+                escaped = str(clip.resolve()).replace("'", "'\\''")
+                f.write(f"file '{escaped}'\n")
+
+        ffmpeg = ffmpeg_exe()
+
+        result = subprocess.run(
+            [
+                ffmpeg, "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(concat_list),
+                "-c", "copy",
+                "-movflags", "+faststart",
+                str(output_path)
+            ],
+            capture_output=True, text=True
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                "FFmpeg concat failed:\n" + result.stderr[-4000:]
+            )
+
+        return output_path
+
+    finally:
+
+        for clip in beat_clips:
+            try:
+                Path(clip).unlink()
+            except Exception:
+                pass
+
+        try:
+            (work_dir / "concat.txt").unlink()
+        except Exception:
+            pass
+
+        try:
+            work_dir.rmdir()
+        except Exception:
+            pass
