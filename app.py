@@ -1,4 +1,4 @@
-"""Cartoon Studio V6 shell with motion, true actions and timelines."""
+"""Cartoon Studio V6 shell with motion, true actions, timelines and enhanced Discovery Story."""
 import sys,os
 from pathlib import Path
 import streamlit as st
@@ -20,7 +20,7 @@ try:
 except Exception as exc: EXPLAINER_STUDIO_ERROR=exc
 EVIDENCE_BOARD_AVAILABLE=False; EVIDENCE_BOARD_ERROR=None
 try:
- from evidence_board_ui import render_evidence_board_studio; EVIDENCE_BOARD_AVAILABLE=True
+ from evidence_board_ui_v2 import render_evidence_board_studio; EVIDENCE_BOARD_AVAILABLE=True
 except Exception as exc: EVIDENCE_BOARD_ERROR=exc
 MOTION_PRESETS=["Automatic (dialogue gestures)","Idle","Talk","Walk","Run","Jump","Bounce","Float","Nod","Wave","Point","Shake","Spin","Slide Left","Slide Right","Dance","Celebrate","Crouch","Pulse"]
 
@@ -38,12 +38,12 @@ def apply_classic_motion_override(label):
 
 st.markdown("<style>.block-container{padding-top:1.5rem;padding-bottom:3rem}</style>",unsafe_allow_html=True)
 st.title("🎬 Cartoon Studio V6")
-st.caption("Character dialogue cartoons, faceless explainers, RealityBlend scenes, and evidence-board videos — one lightweight studio.")
+st.caption("Character dialogue cartoons, faceless explainers, RealityBlend scenes, and Discovery Story evidence videos — one lightweight studio.")
 with st.sidebar:
  st.header("🎛️ Studio"); mode=st.radio("Creation mode",["🎭 Classic Cartoon","🌍 RealityBlend","📊 Explainer","🕵️ Evidence Board","🎞️ Join Clips"],index=0); st.divider()
  if mode=="🎭 Classic Cartoon":
   st.subheader("🎞️ Quick Motion"); quick=st.selectbox("Quick action",MOTION_PRESETS,key="classic_motion"); apply_classic_motion_override(quick); st.caption("Use the per-character timeline below for sequenced actions.")
- st.caption("Mode status:"); st.caption(f"{'✅' if CLASSIC_AVAILABLE else '❌'} Classic Cartoon"); st.caption(f"{'✅' if REALITYBLEND_AVAILABLE else '❌'} RealityBlend"); st.caption(f"{'✅' if EXPLAINER_STUDIO_AVAILABLE else '❌'} Explainer"); st.caption(f"{'✅' if EVIDENCE_BOARD_AVAILABLE else '❌'} Evidence Board")
+ st.caption("Mode status:"); st.caption(f"{'✅' if CLASSIC_AVAILABLE else '❌'} Classic Cartoon"); st.caption(f"{'✅' if REALITYBLEND_AVAILABLE else '❌'} RealityBlend"); st.caption(f"{'✅' if EXPLAINER_STUDIO_AVAILABLE else '❌'} Explainer"); st.caption(f"{'✅' if EVIDENCE_BOARD_AVAILABLE else '❌'} Discovery Story")
 
 if mode=="🎭 Classic Cartoon":
  if CLASSIC_AVAILABLE:
@@ -52,10 +52,8 @@ if mode=="🎭 Classic Cartoon":
   names=list(getattr(CLASSIC_MODULE,"CHARACTERS",{}).keys()); cols=st.columns(min(3,len(names)))
   for i,name in enumerate(names):
    with cols[i%len(cols)]:
-    current=st.session_state.get(f"v6_action_{name}","Idle")
-    selected=st.selectbox(f"{name} default",ACTION_PRESETS,index=ACTION_PRESETS.index(current) if current in ACTION_PRESETS else 0,key=f"v6_action_select_{name}"); st.session_state[f"v6_action_{name}"]=selected
-    timeline=st.text_area("Timeline",value=st.session_state.get(f"v6_timeline_{name}",""),height=105,key=f"v6_timeline_input_{name}",placeholder="0-2: Walk In\n2-4: Talk\n4-5: Point\n5-7: Walk")
-    st.session_state[f"v6_timeline_{name}"]=timeline
+    current=st.session_state.get(f"v6_action_{name}","Idle"); selected=st.selectbox(f"{name} default",ACTION_PRESETS,index=ACTION_PRESETS.index(current) if current in ACTION_PRESETS else 0,key=f"v6_action_select_{name}"); st.session_state[f"v6_action_{name}"]=selected
+    timeline=st.text_area("Timeline",value=st.session_state.get(f"v6_timeline_{name}",""),height=105,key=f"v6_timeline_input_{name}",placeholder="0-2: Walk In\n2-4: Talk\n4-5: Point\n5-7: Walk"); st.session_state[f"v6_timeline_{name}"]=timeline
   render_classic_cartoon()
  else: st.error("Classic Cartoon mode could not be loaded."); st.code(str(CLASSIC_ERROR))
 elif mode=="🌍 RealityBlend":
@@ -66,7 +64,7 @@ elif mode=="📊 Explainer":
  else: st.error("Explainer could not be loaded."); st.code(str(EXPLAINER_STUDIO_ERROR))
 elif mode=="🕵️ Evidence Board":
  if EVIDENCE_BOARD_AVAILABLE: render_evidence_board_studio()
- else: st.error("Evidence Board could not be loaded."); st.code(str(EVIDENCE_BOARD_ERROR))
+ else: st.error("Discovery Story could not be loaded."); st.code(str(EVIDENCE_BOARD_ERROR))
 elif mode=="🎞️ Join Clips":
  st.header("🎞️ Join Clips"); uploads=st.file_uploader("Upload MP4 clips in order",type=["mp4","mov","m4v"],accept_multiple_files=True)
  if uploads and CLASSIC_AVAILABLE and st.button("🔗 Join Clips",type="primary"):
@@ -78,5 +76,5 @@ elif mode=="🎞️ Join Clips":
    except Exception: pass
 st.divider()
 with st.expander("🔧 V6 Diagnostics"):
- st.write("Python:",sys.version.split()[0]); st.write("Modes",{"Classic Cartoon":CLASSIC_AVAILABLE,"RealityBlend":REALITYBLEND_AVAILABLE,"Explainer":EXPLAINER_STUDIO_AVAILABLE,"Evidence Board":EVIDENCE_BOARD_AVAILABLE}); st.write("Motion engine:",Path("motion_presets.py").exists()); st.write("Timeline engine:",Path("timeline_actions.py").exists()); st.write("Classic action engine:",Path("classic_actions.py").exists()); st.write("Expanded art pack:",Path("realityblend_art.py").exists())
+ st.write("Python:",sys.version.split()[0]); st.write("Modes",{"Classic Cartoon":CLASSIC_AVAILABLE,"RealityBlend":REALITYBLEND_AVAILABLE,"Explainer":EXPLAINER_STUDIO_AVAILABLE,"Discovery Story":EVIDENCE_BOARD_AVAILABLE}); st.write("Motion engine:",Path("motion_presets.py").exists()); st.write("Timeline engine:",Path("timeline_actions.py").exists()); st.write("Classic action engine:",Path("classic_actions.py").exists()); st.write("Expanded art pack:",Path("realityblend_art.py").exists()); st.write("Discovery Story engine:",Path("evidence_link_story.py").exists())
 st.caption("Cartoon Studio V6")
