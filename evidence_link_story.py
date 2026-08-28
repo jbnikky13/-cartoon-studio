@@ -1,12 +1,11 @@
 """Discovery Story: turn a public webpage into an editable evidence-board draft."""
 from html import unescape
 import re
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin,urlparse
 import requests
 from bs4 import BeautifulSoup
 
-
-def fetch_story(url, max_chars=18000, max_images=12, timeout=15):
+def fetch_story(url,max_chars=18000,max_images=12,timeout=15):
     url=(url or "").strip(); parsed=urlparse(url)
     if parsed.scheme not in ("http","https") or not parsed.netloc: raise ValueError("Please enter a valid public http(s) URL.")
     r=requests.get(url,headers={"User-Agent":"CartoonStudioDiscovery/2.0"},timeout=timeout); r.raise_for_status()
@@ -31,11 +30,9 @@ def fetch_story(url, max_chars=18000, max_images=12, timeout=15):
     text=unescape(text or description or soup.get_text(" ",strip=True))[:max_chars]
     return {"url":r.url,"title":title.strip(),"description":description.strip(),"text":text,"image_urls":image_urls[:max_images]}
 
-
 def _meta(soup,name):
     node=soup.find("meta",attrs={"property":name}) or soup.find("meta",attrs={"name":name})
     return (node.get("content") or "").strip() if node else ""
-
 
 def discovery_beats(story,count=6):
     title=story.get("title") or "Untitled discovery"; desc=story.get("description") or ""; text=story.get("text") or ""
@@ -48,6 +45,9 @@ def discovery_beats(story,count=6):
     while len(beats)<count: beats.append("Another piece of evidence helps connect the story.")
     return beats[:count]
 
+def make_story_beats(story,count=6):
+    """Backward-compatible name used by the Evidence Board UI."""
+    return discovery_beats(story,count=count)
 
 def download_images(story,max_downloads=8,timeout=12):
     results=[]
