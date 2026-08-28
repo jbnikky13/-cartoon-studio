@@ -1,4 +1,4 @@
-"""RealityBlend V6 UI with built-in animated backgrounds and stick figures."""
+"""RealityBlend V6 UI: animated backgrounds, stick figures and motion presets."""
 from pathlib import Path
 import tempfile
 import streamlit as st
@@ -6,14 +6,20 @@ from PIL import Image
 import realityblend_engine as rb
 from realityblend_engine import Character, Scene, load_rgba, remove_simple_background, chroma_key, render_timeline_video, EDGE_TTS_AVAILABLE
 from realityblend_assets import BUILTIN_BACKGROUNDS, STICK_FIGURE_STYLES, generate_builtin_background, preview_builtin_background, generate_stick_figure
+from realityblend_art import ART_BACKGROUNDS, generate_art_background, preview_art_background
+from motion_presets import MOTION_PRESETS
 from realityblend_models import build_timeline
 
 NARRATOR_VOICES={"Bright / Female":"en-US-AriaNeural","Warm / Female":"en-US-JennyNeural","Calm / Male":"en-US-DavisNeural","Deep / Male":"en-US-GuyNeural"}
 
+# Selected procedural background is read by the renderer on every frame.
 def _camera_background_with_builtin(scene,t):
     selected=getattr(rb,"ACTIVE_BUILTIN_BACKGROUND",None)
     if selected:
-        bg=generate_builtin_background(selected,(scene.width,scene.height),t)
+        if selected in ART_BACKGROUNDS:
+            bg=generate_art_background(selected,(scene.width,scene.height),t)
+        else:
+            bg=generate_builtin_background(selected,(scene.width,scene.height),t)
         from PIL import ImageEnhance
         bg=ImageEnhance.Brightness(bg).enhance(scene.brightness)
         bg=ImageEnhance.Contrast(bg).enhance(scene.contrast)
@@ -25,6 +31,12 @@ if not hasattr(rb,"_original_camera_background"):
     rb._original_camera_background=rb.camera_background
     rb.camera_background=_camera_background_with_builtin
 
+# Extend the existing engine motion vocabulary without changing its public API.
+def _enhanced_motion_values(motion,t):
+    from motion_presets import motion_values
+    return motion_values(motion,t)
+rb._motion_values=_enhanced_motion_values
+
 
 def render_realityblend():
     st.header("🌍 RealityBlend V6")
@@ -34,11 +46,20 @@ def render_realityblend():
     bg_source=st.radio("Background source",["Upload image","Built-in animated"],horizontal=True,key="rb_bg_source")
     rb.ACTIVE_BUILTIN_BACKGROUND=None
     if bg_source=="Built-in animated":
-        bg_name=st.selectbox("Choose an animated background",BUILTIN_BACKGROUNDS,key="rb_builtin_bg")
-        st.image(preview_builtin_background(bg_name,size=(270,480)),caption=f"Preview · {bg_name}",width=220)
-        st.caption("The preview is a still frame; the exported video animates continuously.")
+        bg_groups={"Classic Motion Worlds":BUILTIN_BACKGROUNDS,"Art & Fantasy Worlds":ART_BACKGROUNDS}
+        group=st.selectbox("Background collection",list(bg_groups),key="rb_bg_group")
+        bg_name=st.selectbox("Choose an animated background",bg_groups[group],key="rb_builtin_bg")
+        if bg_name in ART_BACKGROUNDS:
+            preview=preview_art_background(bg_name)
+        else:
+            preview=preview_builtin_background(bg_name,size=(270,480))
+        st.image(preview,caption=f"Preview · {bg_name}",width=220)
+        st.caption("Preview is a still frame; the exported video animates continuously.")
         rb.ACTIVE_BUILTIN_BACKGROUND=bg_name
-        bg=generate_builtin_background(bg_name,size=(540,960),t=0.0)
+        if bg_name in ART_BACKGROUNDS:
+            bg=generate_art_background(bg_name,size=(540,960),t=0.0)
+        else:
+            bg=generate_builtin_background(bg_name,size=(540,960),t=0.0)
     else:
         bg_file=st.file_uploader("Upload a real background",type=["png","jpg","jpeg"],key="rb_background")
         if not bg_file:
@@ -91,7 +112,7 @@ def render_realityblend():
     else: width,height=540,540
     if not EDGE_TTS_AVAILABLE: st.warning("⚠️ edge-tts isn't installed, so beats will render silent. Add edge-tts>=6.1.12 to requirements_v6.txt.")
 
-    st.subheader("5. Character placement")
+    st.subheader("5. Character placement & motion")
     chars,voices={},{}; cols=st.columns(min(3,len(prepared)))
     for i,(name,img) in enumerate(prepared):
         with cols[i%len(cols)]:
@@ -99,17 +120,19 @@ def render_realityblend():
             x=st.slider("X",0.05,0.95,min(0.85,0.28+i*0.38),0.01,key=f"x_{i}")
             y=st.slider("Base/Y",0.35,0.98,0.84,0.01,key=f"y_{i}")
             scale=st.slider("Size",0.15,0.90,0.55,0.01,key=f"s_{i}")
+            motion=st.selectbox("Motion",MOTION_PRESETS,index=0 if i==0 else 1,key=f"motion_{i}")
+            flip=st.checkbox("Flip",value=False,key=f"flip_{i}")
             voice_label=st.selectbox("Voice",list(NARRATOR_VOICES.keys()),index=i%len(NARRATOR_VOICES),key=f"v_{i}")
             char_key=Path(name).stem
-            chars[char_key]=Character(name=char_key,image=img,x=x,y=y,scale=scale,z=i+10,motion="idle",shadow=True)
+            chars[char_key]=Character(name=char_key,image=img,x=x,y=y,scale=scale,z=i+10,motion=motion.lower(),flip=flip,shadow=True)
             voices[char_key]=NARRATOR_VOICES[voice_label]
-    st.caption("Make the script speaker name match the character name. Stick figures are generated locally and need no uploads.")
+    st.caption("Motion presets animate each character while they speak or wait: walk, run, bounce, float, nod, wave, point, shake, spin, slide and pulse.")
 
     st.subheader("6. Generate")
     if st.button("🎬 Render RealityBlend Video",type="primary",use_container_width=True):
         out=Path(tempfile.gettempdir())/"cartoon_studio_v6_realityblend.mp4"
         scene_template=Scene(background=bg,fps=fps,width=width,height=height,camera_zoom=zoom,brightness=brightness,contrast=contrast,saturation=saturation)
-        progress=st.progress(0.0); status=st.empty(); status.text("Rendering beats (audio + animated background + characters)...")
+        progress=st.progress(0.0); status=st.empty(); status.text("Rendering beats (audio + animated background + character motion)...")
         try:
             render_timeline_video(scene_template,chars,rows,voices,out,progress=lambda p: progress.progress(min(1.0,p)))
             status.success("RealityBlend video created."); st.video(str(out)); st.download_button("⬇️ Download MP4",data=out.read_bytes(),file_name="realityblend_v6.mp4",mime="video/mp4")
