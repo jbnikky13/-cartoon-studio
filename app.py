@@ -1,4 +1,4 @@
-"""Cartoon Studio V6 shell with enhanced motion and art controls."""
+"""Cartoon Studio V6 shell with enhanced motion, art, and true action controls."""
 import sys, os
 from pathlib import Path
 import streamlit as st
@@ -10,9 +10,12 @@ try:
     from realityblend_ui import render_realityblend
     REALITYBLEND_AVAILABLE=True
 except Exception as exc: REALITYBLEND_ERROR=exc
-CLASSIC_AVAILABLE=False; CLASSIC_ERROR=None
+CLASSIC_AVAILABLE=False; CLASSIC_ERROR=None; CLASSIC_MODULE=None
 try:
+    import classic_cartoon_ui as CLASSIC_MODULE
     from classic_cartoon_ui import render_classic_cartoon, join_videos
+    from classic_actions import patch_classic_module, ACTION_PRESETS
+    patch_classic_module(CLASSIC_MODULE)
     CLASSIC_AVAILABLE=True
 except Exception as exc: CLASSIC_ERROR=exc
 EXPLAINER_STUDIO_AVAILABLE=False; EXPLAINER_STUDIO_ERROR=None
@@ -26,10 +29,11 @@ try:
     EVIDENCE_BOARD_AVAILABLE=True
 except Exception as exc: EVIDENCE_BOARD_ERROR=exc
 
-MOTION_PRESETS=["Automatic (dialogue gestures)","Idle","Talk","Walk","Run","Bounce","Float","Nod","Wave","Point","Shake","Spin","Slide Left","Slide Right","Pulse"]
-CLASSIC_MOTION_MAP={"Idle":"None","Talk":"Talking Hands","Walk":"Talking Hands","Run":"Laughing","Bounce":"Laughing","Float":"Thinking","Nod":"Thinking","Wave":"Waving","Point":"Pointing","Shake":"Nervous","Spin":"Waving","Slide Left":"None","Slide Right":"None","Pulse":"None"}
+MOTION_PRESETS=["Automatic (dialogue gestures)","Idle","Talk","Walk","Run","Jump","Bounce","Float","Nod","Wave","Point","Shake","Spin","Slide Left","Slide Right","Dance","Celebrate","Crouch","Pulse"]
+CLASSIC_MOTION_MAP={"Idle":"Idle","Talk":"Talk","Walk":"Walk","Run":"Run","Jump":"Jump","Bounce":"Bounce","Float":"Float","Nod":"Nod","Wave":"Wave","Point":"Point","Shake":"Shake","Spin":"Spin","Slide Left":"Slide Left","Slide Right":"Slide Right","Dance":"Dance","Celebrate":"Celebrate","Crouch":"Crouch","Pulse":"Pulse"}
 
 def apply_classic_motion_override(label):
+    """Keep the legacy Classic sprite motion override for uploaded/full-body sprites."""
     try:
         import sprite_renderer as SPRITE
         if not hasattr(SPRITE,"_v6_original_compose_character_frame"):
@@ -38,7 +42,11 @@ def apply_classic_motion_override(label):
         if label==MOTION_PRESETS[0]:
             SPRITE.compose_character_frame=original
             return
-        forced=CLASSIC_MOTION_MAP.get(label,"None")
+        forced=CLASSIC_MOTION_MAP.get(label,"Idle")
+        # Sprite renderer currently exposes gesture-based whole-body motion.
+        # Map the new action names to readable reactions without breaking its API.
+        fallback={"Walk":"Talking Hands","Run":"Laughing","Jump":"Laughing","Bounce":"Laughing","Float":"Thinking","Nod":"Thinking","Wave":"Waving","Point":"Pointing","Shake":"Nervous","Spin":"Waving","Dance":"Laughing","Celebrate":"Waving","Crouch":"Thinking","Slide Left":"None","Slide Right":"None","Pulse":"None"}
+        forced=fallback.get(forced,forced)
         def wrapped(character_name,global_frame,talking,seed,scale=1.0,gesture=None):
             return original(character_name,global_frame,talking,seed,scale,gesture=forced)
         SPRITE.compose_character_frame=wrapped
@@ -54,9 +62,9 @@ with st.sidebar:
     mode=st.radio("Creation mode",["🎭 Classic Cartoon","🌍 RealityBlend","📊 Explainer","🕵️ Evidence Board","🎞️ Join Clips"],index=0)
     st.divider()
     if mode=="🎭 Classic Cartoon":
-        st.subheader("🎞️ Motion")
-        classic_motion=st.selectbox("Character movement",MOTION_PRESETS,key="classic_motion")
-        st.caption("Automatic keeps the existing dialogue-driven gestures. Presets add a stronger whole-body movement style.")
+        st.subheader("🎞️ Character Actions")
+        classic_motion=st.selectbox("Quick action",MOTION_PRESETS,key="classic_motion")
+        st.caption("Choose a whole-body action. Individual character controls below can also select Walk In, Walk, Run, Jump, Dance, Celebrate, Crouch and Exit.")
         apply_classic_motion_override(classic_motion)
     st.caption("Mode status:")
     st.caption(f"{'✅' if CLASSIC_AVAILABLE else '❌'} Classic Cartoon")
@@ -65,14 +73,24 @@ with st.sidebar:
     st.caption(f"{'✅' if EVIDENCE_BOARD_AVAILABLE else '❌'} Evidence Board")
 
 if mode=="🎭 Classic Cartoon":
-    if CLASSIC_AVAILABLE: render_classic_cartoon()
+    if CLASSIC_AVAILABLE:
+        st.subheader("🎬 Per-Character Actions")
+        names=list(getattr(CLASSIC_MODULE,"CHARACTERS",{}).keys())
+        if names:
+            cols=st.columns(min(3,len(names)))
+            for i,name in enumerate(names):
+                with cols[i%len(cols)]:
+                    current=st.session_state.get(f"v6_action_{name}","Idle")
+                    selected=st.selectbox(f"{name}",ACTION_PRESETS,index=ACTION_PRESETS.index(current) if current in ACTION_PRESETS else 0,key=f"v6_action_select_{name}")
+                    st.session_state[f"v6_action_{name}"]=selected
+        render_classic_cartoon()
     else: st.error("Classic Cartoon mode could not be loaded."); st.code(str(CLASSIC_ERROR))
 elif mode=="🌍 RealityBlend":
     if REALITYBLEND_AVAILABLE: render_realityblend()
     else: st.error("RealityBlend could not be loaded."); st.code(str(REALITYBLEND_ERROR))
 elif mode=="📊 Explainer":
     if EXPLAINER_STUDIO_AVAILABLE: render_explainer_studio()
-    else: st.error("Explainer mode could not be loaded."); st.code(str(EXPLAINER_STUDIO_ERROR))
+    else: st.error("Explainer could not be loaded."); st.code(str(EXPLAINER_STUDIO_ERROR))
 elif mode=="🕵️ Evidence Board":
     if EVIDENCE_BOARD_AVAILABLE: render_evidence_board_studio()
     else: st.error("Evidence Board could not be loaded."); st.code(str(EVIDENCE_BOARD_ERROR))
@@ -102,5 +120,5 @@ with st.expander("🔧 V6 Diagnostics"):
     if REALITYBLEND_ERROR: st.write("RealityBlend import error:",repr(REALITYBLEND_ERROR))
     if EXPLAINER_STUDIO_ERROR: st.write("Explainer import error:",repr(EXPLAINER_STUDIO_ERROR))
     if EVIDENCE_BOARD_ERROR: st.write("Evidence Board import error:",repr(EVIDENCE_BOARD_ERROR))
-    st.write("Motion engine:",Path("motion_presets.py").exists()); st.write("Expanded art pack:",Path("realityblend_art.py").exists())
+    st.write("Motion engine:",Path("motion_presets.py").exists()); st.write("Classic action engine:",Path("classic_actions.py").exists()); st.write("Expanded art pack:",Path("realityblend_art.py").exists())
 st.caption("Cartoon Studio V6")
