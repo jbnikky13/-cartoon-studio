@@ -4,5 +4,5 @@ imageio-ffmpeg>=0.5.1
 edge-tts>=6.1.12
 requests>=2.31,<3
 beautifulsoup4>=4.12,<5
-# Optional: enables speech-to-text when processing uploaded videos.
-faster-whisper>=1.0,<2
+# Optional speech-to-text:
+# faster-whisper>=1.0,<2
