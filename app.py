@@ -1,124 +1,82 @@
-"""Cartoon Studio V6 shell with enhanced motion, art, and true action controls."""
-import sys, os
+"""Cartoon Studio V6 shell with motion, true actions and timelines."""
+import sys,os
 from pathlib import Path
 import streamlit as st
-
 st.set_page_config(page_title="Cartoon Studio V6",page_icon="🎬",layout="wide",initial_sidebar_state="expanded")
-
 REALITYBLEND_AVAILABLE=False; REALITYBLEND_ERROR=None
 try:
-    from realityblend_ui import render_realityblend
-    REALITYBLEND_AVAILABLE=True
+ from realityblend_ui import render_realityblend; REALITYBLEND_AVAILABLE=True
 except Exception as exc: REALITYBLEND_ERROR=exc
 CLASSIC_AVAILABLE=False; CLASSIC_ERROR=None; CLASSIC_MODULE=None
 try:
-    import classic_cartoon_ui as CLASSIC_MODULE
-    from classic_cartoon_ui import render_classic_cartoon, join_videos
-    from classic_actions import patch_classic_module, ACTION_PRESETS
-    patch_classic_module(CLASSIC_MODULE)
-    CLASSIC_AVAILABLE=True
+ import classic_cartoon_ui as CLASSIC_MODULE
+ from classic_cartoon_ui import render_classic_cartoon,join_videos
+ from classic_actions import patch_classic_module,ACTION_PRESETS
+ patch_classic_module(CLASSIC_MODULE); CLASSIC_AVAILABLE=True
 except Exception as exc: CLASSIC_ERROR=exc
 EXPLAINER_STUDIO_AVAILABLE=False; EXPLAINER_STUDIO_ERROR=None
 try:
-    from explainer_studio_ui import render_explainer_studio
-    EXPLAINER_STUDIO_AVAILABLE=True
+ from explainer_studio_ui import render_explainer_studio; EXPLAINER_STUDIO_AVAILABLE=True
 except Exception as exc: EXPLAINER_STUDIO_ERROR=exc
 EVIDENCE_BOARD_AVAILABLE=False; EVIDENCE_BOARD_ERROR=None
 try:
-    from evidence_board_ui import render_evidence_board_studio
-    EVIDENCE_BOARD_AVAILABLE=True
+ from evidence_board_ui import render_evidence_board_studio; EVIDENCE_BOARD_AVAILABLE=True
 except Exception as exc: EVIDENCE_BOARD_ERROR=exc
-
 MOTION_PRESETS=["Automatic (dialogue gestures)","Idle","Talk","Walk","Run","Jump","Bounce","Float","Nod","Wave","Point","Shake","Spin","Slide Left","Slide Right","Dance","Celebrate","Crouch","Pulse"]
-CLASSIC_MOTION_MAP={"Idle":"Idle","Talk":"Talk","Walk":"Walk","Run":"Run","Jump":"Jump","Bounce":"Bounce","Float":"Float","Nod":"Nod","Wave":"Wave","Point":"Point","Shake":"Shake","Spin":"Spin","Slide Left":"Slide Left","Slide Right":"Slide Right","Dance":"Dance","Celebrate":"Celebrate","Crouch":"Crouch","Pulse":"Pulse"}
 
 def apply_classic_motion_override(label):
-    """Keep the legacy Classic sprite motion override for uploaded/full-body sprites."""
-    try:
-        import sprite_renderer as SPRITE
-        if not hasattr(SPRITE,"_v6_original_compose_character_frame"):
-            SPRITE._v6_original_compose_character_frame=SPRITE.compose_character_frame
-        original=SPRITE._v6_original_compose_character_frame
-        if label==MOTION_PRESETS[0]:
-            SPRITE.compose_character_frame=original
-            return
-        forced=CLASSIC_MOTION_MAP.get(label,"Idle")
-        # Sprite renderer currently exposes gesture-based whole-body motion.
-        # Map the new action names to readable reactions without breaking its API.
-        fallback={"Walk":"Talking Hands","Run":"Laughing","Jump":"Laughing","Bounce":"Laughing","Float":"Thinking","Nod":"Thinking","Wave":"Waving","Point":"Pointing","Shake":"Nervous","Spin":"Waving","Dance":"Laughing","Celebrate":"Waving","Crouch":"Thinking","Slide Left":"None","Slide Right":"None","Pulse":"None"}
-        forced=fallback.get(forced,forced)
-        def wrapped(character_name,global_frame,talking,seed,scale=1.0,gesture=None):
-            return original(character_name,global_frame,talking,seed,scale,gesture=forced)
-        SPRITE.compose_character_frame=wrapped
-    except Exception:
-        pass
+ try:
+  import sprite_renderer as SPRITE
+  if not hasattr(SPRITE,"_v6_original_compose_character_frame"): SPRITE._v6_original_compose_character_frame=SPRITE.compose_character_frame
+  original=SPRITE._v6_original_compose_character_frame
+  if label==MOTION_PRESETS[0]: SPRITE.compose_character_frame=original; return
+  fallback={"Walk":"Talking Hands","Run":"Laughing","Jump":"Laughing","Bounce":"Laughing","Float":"Thinking","Nod":"Thinking","Wave":"Waving","Point":"Pointing","Shake":"Nervous","Spin":"Waving","Dance":"Laughing","Celebrate":"Waving","Crouch":"Thinking","Slide Left":"None","Slide Right":"None","Talk":"Talking Hands","Pulse":"None","Idle":"None"}
+  forced=fallback.get(label,"None")
+  def wrapped(character_name,global_frame,talking,seed,scale=1.0,gesture=None): return original(character_name,global_frame,talking,seed,scale,gesture=forced)
+  SPRITE.compose_character_frame=wrapped
+ except Exception: pass
 
-st.markdown("""<style>.block-container{padding-top:1.5rem;padding-bottom:3rem}.v6-card{padding:1rem 1.2rem;border:1px solid rgba(128,128,128,.25);border-radius:14px;margin-bottom:1rem}.v6-badge{display:inline-block;padding:.25rem .6rem;border-radius:999px;font-size:.8rem;font-weight:600;background:rgba(70,130,180,.14)}</style>""",unsafe_allow_html=True)
+st.markdown("<style>.block-container{padding-top:1.5rem;padding-bottom:3rem}</style>",unsafe_allow_html=True)
 st.title("🎬 Cartoon Studio V6")
 st.caption("Character dialogue cartoons, faceless explainers, RealityBlend scenes, and evidence-board videos — one lightweight studio.")
-
 with st.sidebar:
-    st.header("🎛️ Studio")
-    mode=st.radio("Creation mode",["🎭 Classic Cartoon","🌍 RealityBlend","📊 Explainer","🕵️ Evidence Board","🎞️ Join Clips"],index=0)
-    st.divider()
-    if mode=="🎭 Classic Cartoon":
-        st.subheader("🎞️ Character Actions")
-        classic_motion=st.selectbox("Quick action",MOTION_PRESETS,key="classic_motion")
-        st.caption("Choose a whole-body action. Individual character controls below can also select Walk In, Walk, Run, Jump, Dance, Celebrate, Crouch and Exit.")
-        apply_classic_motion_override(classic_motion)
-    st.caption("Mode status:")
-    st.caption(f"{'✅' if CLASSIC_AVAILABLE else '❌'} Classic Cartoon")
-    st.caption(f"{'✅' if REALITYBLEND_AVAILABLE else '❌'} RealityBlend")
-    st.caption(f"{'✅' if EXPLAINER_STUDIO_AVAILABLE else '❌'} Explainer")
-    st.caption(f"{'✅' if EVIDENCE_BOARD_AVAILABLE else '❌'} Evidence Board")
+ st.header("🎛️ Studio"); mode=st.radio("Creation mode",["🎭 Classic Cartoon","🌍 RealityBlend","📊 Explainer","🕵️ Evidence Board","🎞️ Join Clips"],index=0); st.divider()
+ if mode=="🎭 Classic Cartoon":
+  st.subheader("🎞️ Quick Motion"); quick=st.selectbox("Quick action",MOTION_PRESETS,key="classic_motion"); apply_classic_motion_override(quick); st.caption("Use the per-character timeline below for sequenced actions.")
+ st.caption("Mode status:"); st.caption(f"{'✅' if CLASSIC_AVAILABLE else '❌'} Classic Cartoon"); st.caption(f"{'✅' if REALITYBLEND_AVAILABLE else '❌'} RealityBlend"); st.caption(f"{'✅' if EXPLAINER_STUDIO_AVAILABLE else '❌'} Explainer"); st.caption(f"{'✅' if EVIDENCE_BOARD_AVAILABLE else '❌'} Evidence Board")
 
 if mode=="🎭 Classic Cartoon":
-    if CLASSIC_AVAILABLE:
-        st.subheader("🎬 Per-Character Actions")
-        names=list(getattr(CLASSIC_MODULE,"CHARACTERS",{}).keys())
-        if names:
-            cols=st.columns(min(3,len(names)))
-            for i,name in enumerate(names):
-                with cols[i%len(cols)]:
-                    current=st.session_state.get(f"v6_action_{name}","Idle")
-                    selected=st.selectbox(f"{name}",ACTION_PRESETS,index=ACTION_PRESETS.index(current) if current in ACTION_PRESETS else 0,key=f"v6_action_select_{name}")
-                    st.session_state[f"v6_action_{name}"]=selected
-        render_classic_cartoon()
-    else: st.error("Classic Cartoon mode could not be loaded."); st.code(str(CLASSIC_ERROR))
+ if CLASSIC_AVAILABLE:
+  st.subheader("🎬 Character Action Timeline")
+  st.info("One cue per line. Example: 0-2: Walk In → 2-4: Talk → 4-5: Point → 5-7: Walk")
+  names=list(getattr(CLASSIC_MODULE,"CHARACTERS",{}).keys()); cols=st.columns(min(3,len(names)))
+  for i,name in enumerate(names):
+   with cols[i%len(cols)]:
+    current=st.session_state.get(f"v6_action_{name}","Idle")
+    selected=st.selectbox(f"{name} default",ACTION_PRESETS,index=ACTION_PRESETS.index(current) if current in ACTION_PRESETS else 0,key=f"v6_action_select_{name}"); st.session_state[f"v6_action_{name}"]=selected
+    timeline=st.text_area("Timeline",value=st.session_state.get(f"v6_timeline_{name}",""),height=105,key=f"v6_timeline_input_{name}",placeholder="0-2: Walk In\n2-4: Talk\n4-5: Point\n5-7: Walk")
+    st.session_state[f"v6_timeline_{name}"]=timeline
+  render_classic_cartoon()
+ else: st.error("Classic Cartoon mode could not be loaded."); st.code(str(CLASSIC_ERROR))
 elif mode=="🌍 RealityBlend":
-    if REALITYBLEND_AVAILABLE: render_realityblend()
-    else: st.error("RealityBlend could not be loaded."); st.code(str(REALITYBLEND_ERROR))
+ if REALITYBLEND_AVAILABLE: render_realityblend()
+ else: st.error("RealityBlend could not be loaded."); st.code(str(REALITYBLEND_ERROR))
 elif mode=="📊 Explainer":
-    if EXPLAINER_STUDIO_AVAILABLE: render_explainer_studio()
-    else: st.error("Explainer could not be loaded."); st.code(str(EXPLAINER_STUDIO_ERROR))
+ if EXPLAINER_STUDIO_AVAILABLE: render_explainer_studio()
+ else: st.error("Explainer could not be loaded."); st.code(str(EXPLAINER_STUDIO_ERROR))
 elif mode=="🕵️ Evidence Board":
-    if EVIDENCE_BOARD_AVAILABLE: render_evidence_board_studio()
-    else: st.error("Evidence Board could not be loaded."); st.code(str(EVIDENCE_BOARD_ERROR))
+ if EVIDENCE_BOARD_AVAILABLE: render_evidence_board_studio()
+ else: st.error("Evidence Board could not be loaded."); st.code(str(EVIDENCE_BOARD_ERROR))
 elif mode=="🎞️ Join Clips":
-    st.header("🎞️ Join Clips"); st.write("Combine exported clips from any mode into one video.")
-    if not CLASSIC_AVAILABLE: st.error("Join Clips needs classic_cartoon_ui.py.")
-    else:
-        uploads=st.file_uploader("Upload MP4 clips, in the order you want them joined",type=["mp4","mov","m4v"],accept_multiple_files=True)
-        if uploads:
-            st.success(f"{len(uploads)} clip(s) ready.")
-            for i,upload in enumerate(uploads,1): st.write(f"{i}. {upload.name}")
-            if st.button("🔗 Join Clips",type="primary"):
-                with st.spinner("Joining clips..."): result_path,err=join_videos(uploads)
-                if err: st.error(f"Join failed: {err}")
-                elif result_path and Path(result_path).exists():
-                    video_bytes=Path(result_path).read_bytes(); st.success("Joined successfully."); st.video(video_bytes)
-                    st.download_button("⬇️ Download Joined MP4",data=video_bytes,file_name="joined_episode.mp4",mime="video/mp4")
-                    try: Path(result_path).unlink()
-                    except Exception: pass
-                else: st.error("Join finished, but no output file was produced.")
-
+ st.header("🎞️ Join Clips"); uploads=st.file_uploader("Upload MP4 clips in order",type=["mp4","mov","m4v"],accept_multiple_files=True)
+ if uploads and CLASSIC_AVAILABLE and st.button("🔗 Join Clips",type="primary"):
+  with st.spinner("Joining clips..."): result_path,err=join_videos(uploads)
+  if err: st.error(f"Join failed: {err}")
+  elif result_path and Path(result_path).exists():
+   data=Path(result_path).read_bytes(); st.video(data); st.download_button("⬇️ Download Joined MP4",data=data,file_name="joined_episode.mp4",mime="video/mp4")
+   try: Path(result_path).unlink()
+   except Exception: pass
 st.divider()
 with st.expander("🔧 V6 Diagnostics"):
-    st.write("Python:",sys.version.split()[0]); st.write("Working directory:",os.getcwd())
-    st.write("Modes",{"Classic Cartoon":CLASSIC_AVAILABLE,"RealityBlend":REALITYBLEND_AVAILABLE,"Explainer":EXPLAINER_STUDIO_AVAILABLE,"Evidence Board":EVIDENCE_BOARD_AVAILABLE})
-    if CLASSIC_ERROR: st.write("Classic Cartoon import error:",repr(CLASSIC_ERROR))
-    if REALITYBLEND_ERROR: st.write("RealityBlend import error:",repr(REALITYBLEND_ERROR))
-    if EXPLAINER_STUDIO_ERROR: st.write("Explainer import error:",repr(EXPLAINER_STUDIO_ERROR))
-    if EVIDENCE_BOARD_ERROR: st.write("Evidence Board import error:",repr(EVIDENCE_BOARD_ERROR))
-    st.write("Motion engine:",Path("motion_presets.py").exists()); st.write("Classic action engine:",Path("classic_actions.py").exists()); st.write("Expanded art pack:",Path("realityblend_art.py").exists())
+ st.write("Python:",sys.version.split()[0]); st.write("Modes",{"Classic Cartoon":CLASSIC_AVAILABLE,"RealityBlend":REALITYBLEND_AVAILABLE,"Explainer":EXPLAINER_STUDIO_AVAILABLE,"Evidence Board":EVIDENCE_BOARD_AVAILABLE}); st.write("Motion engine:",Path("motion_presets.py").exists()); st.write("Timeline engine:",Path("timeline_actions.py").exists()); st.write("Classic action engine:",Path("classic_actions.py").exists()); st.write("Expanded art pack:",Path("realityblend_art.py").exists())
 st.caption("Cartoon Studio V6")
