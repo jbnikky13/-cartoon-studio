@@ -4,10 +4,10 @@ import tempfile
 import streamlit as st
 from PIL import Image
 import realityblend_engine as rb
-from realityblend_engine import Character, Scene, load_rgba, remove_simple_background, chroma_key, render_timeline_video, EDGE_TTS_AVAILABLE
+from realityblend_engine import Scene, load_rgba, remove_simple_background, chroma_key, render_timeline_video, EDGE_TTS_AVAILABLE
 from realityblend_assets import BUILTIN_BACKGROUNDS, STICK_FIGURE_STYLES, generate_builtin_background, preview_builtin_background, generate_stick_figure
 from realityblend_art import ART_BACKGROUNDS, generate_art_background, preview_art_background
-from motion_presets import MOTION_PRESETS
+from motion_presets import MOTION_PRESETS, motion_values
 from realityblend_models import build_timeline
 
 NARRATOR_VOICES={"Bright / Female":"en-US-AriaNeural","Warm / Female":"en-US-JennyNeural","Calm / Male":"en-US-DavisNeural","Deep / Male":"en-US-GuyNeural"}
@@ -16,10 +16,8 @@ NARRATOR_VOICES={"Bright / Female":"en-US-AriaNeural","Warm / Female":"en-US-Jen
 def _camera_background_with_builtin(scene,t):
     selected=getattr(rb,"ACTIVE_BUILTIN_BACKGROUND",None)
     if selected:
-        if selected in ART_BACKGROUNDS:
-            bg=generate_art_background(selected,(scene.width,scene.height),t)
-        else:
-            bg=generate_builtin_background(selected,(scene.width,scene.height),t)
+        if selected in ART_BACKGROUNDS: bg=generate_art_background(selected,(scene.width,scene.height),t)
+        else: bg=generate_builtin_background(selected,(scene.width,scene.height),t)
         from PIL import ImageEnhance
         bg=ImageEnhance.Brightness(bg).enhance(scene.brightness)
         bg=ImageEnhance.Contrast(bg).enhance(scene.contrast)
@@ -30,12 +28,21 @@ def _camera_background_with_builtin(scene,t):
 if not hasattr(rb,"_original_camera_background"):
     rb._original_camera_background=rb.camera_background
     rb.camera_background=_camera_background_with_builtin
+rb._motion_values=lambda motion,t: motion_values(motion,t)
 
-# Extend the existing engine motion vocabulary without changing its public API.
-def _enhanced_motion_values(motion,t):
-    from motion_presets import motion_values
-    return motion_values(motion,t)
-rb._motion_values=_enhanced_motion_values
+# render_timeline_video historically converted non-speakers to "idle".
+# This small subclass preserves the motion selected in the UI for those
+# generated beat characters while the current speaker still gets "talk".
+RB_MOTION_BY_NAME={}
+_BaseCharacter=rb.Character
+class MotionCharacter(_BaseCharacter):
+    def __init__(self,*args,**kwargs):
+        name=kwargs.get("name",args[0] if args else "")
+        motion=kwargs.get("motion","idle")
+        if motion=="idle" and name in RB_MOTION_BY_NAME:
+            kwargs["motion"]=RB_MOTION_BY_NAME[name]
+        super().__init__(*args,**kwargs)
+rb.Character=MotionCharacter
 
 
 def render_realityblend():
@@ -49,17 +56,11 @@ def render_realityblend():
         bg_groups={"Classic Motion Worlds":BUILTIN_BACKGROUNDS,"Art & Fantasy Worlds":ART_BACKGROUNDS}
         group=st.selectbox("Background collection",list(bg_groups),key="rb_bg_group")
         bg_name=st.selectbox("Choose an animated background",bg_groups[group],key="rb_builtin_bg")
-        if bg_name in ART_BACKGROUNDS:
-            preview=preview_art_background(bg_name)
-        else:
-            preview=preview_builtin_background(bg_name,size=(270,480))
+        preview=preview_art_background(bg_name) if bg_name in ART_BACKGROUNDS else preview_builtin_background(bg_name,size=(270,480))
         st.image(preview,caption=f"Preview · {bg_name}",width=220)
         st.caption("Preview is a still frame; the exported video animates continuously.")
         rb.ACTIVE_BUILTIN_BACKGROUND=bg_name
-        if bg_name in ART_BACKGROUNDS:
-            bg=generate_art_background(bg_name,size=(540,960),t=0.0)
-        else:
-            bg=generate_builtin_background(bg_name,size=(540,960),t=0.0)
+        bg=generate_art_background(bg_name,size=(540,960),t=0.0) if bg_name in ART_BACKGROUNDS else generate_builtin_background(bg_name,size=(540,960),t=0.0)
     else:
         bg_file=st.file_uploader("Upload a real background",type=["png","jpg","jpeg"],key="rb_background")
         if not bg_file:
@@ -114,6 +115,7 @@ def render_realityblend():
 
     st.subheader("5. Character placement & motion")
     chars,voices={},{}; cols=st.columns(min(3,len(prepared)))
+    RB_MOTION_BY_NAME.clear()
     for i,(name,img) in enumerate(prepared):
         with cols[i%len(cols)]:
             st.markdown(f"**{name}**")
@@ -124,9 +126,10 @@ def render_realityblend():
             flip=st.checkbox("Flip",value=False,key=f"flip_{i}")
             voice_label=st.selectbox("Voice",list(NARRATOR_VOICES.keys()),index=i%len(NARRATOR_VOICES),key=f"v_{i}")
             char_key=Path(name).stem
-            chars[char_key]=Character(name=char_key,image=img,x=x,y=y,scale=scale,z=i+10,motion=motion.lower(),flip=flip,shadow=True)
+            RB_MOTION_BY_NAME[char_key]=motion.lower()
+            chars[char_key]=rb.Character(name=char_key,image=img,x=x,y=y,scale=scale,z=i+10,motion=motion.lower(),flip=flip,shadow=True)
             voices[char_key]=NARRATOR_VOICES[voice_label]
-    st.caption("Motion presets animate each character while they speak or wait: walk, run, bounce, float, nod, wave, point, shake, spin, slide and pulse.")
+    st.caption("Motion: idle, talk, walk, run, bounce, float, nod, wave, point, shake, spin, slide and pulse. Non-speaking characters keep moving while the current speaker talks.")
 
     st.subheader("6. Generate")
     if st.button("🎬 Render RealityBlend Video",type="primary",use_container_width=True):
