@@ -4,6 +4,7 @@ import io, tempfile, random
 import streamlit as st
 from PIL import Image, ImageDraw
 from evidence_board_renderer import BoardItem, Beat, generate_default_corkboard, render_evidence_board_video, EDGE_TTS_AVAILABLE
+from evidence_board_export import finalize_discovery_export
 from evidence_link_story import fetch_story, make_story_beats, download_images
 
 NARRATOR_VOICES={"Bright / Female":"en-US-AriaNeural","Warm / Female":"en-US-JennyNeural","Calm / Male":"en-US-DavisNeural","Deep / Male":"en-US-GuyNeural","Documentary / Male":"en-US-ChristopherNeural"}
@@ -98,23 +99,23 @@ def render_evidence_board_studio():
         items.append(BoardItem(name=name,image=im,x=x,y=y,scale=scale,rotation=rot)); beats.append(Beat(text=line,item_index=i,connect_from_index=i-1 if i else None))
     st.subheader("5. Audio + visual annotations")
     narrator=st.selectbox("Narrator voice",list(NARRATOR_VOICES.keys()))
-    subtitles=st.checkbox("Subtitles",True,key="eb_subtitles")
-    labels=st.checkbox("Evidence labels",True,key="eb_labels")
+    subtitles=st.checkbox("Burn subtitles into MP4",True,key="eb_subtitles")
+    labels=st.checkbox("Burn evidence labels into MP4",True,key="eb_labels")
     stamp=st.text_input("Final conclusion / stamp",placeholder="CONNECTED • WHAT WE KNOW",key="eb_stamp")
     st.caption("Animated connecting strings are rendered between each revealed evidence item.")
     st.subheader("6. Render")
     fmt=st.selectbox("Output format",["16:9 Landscape","9:16 Vertical","1:1 Square"],key="eb_format")
+    aspect={"16:9 Landscape":"16:9","9:16 Vertical":"9:16","1:1 Square":"1:1"}[fmt]
     if st.button("🎬 Create Discovery Story Video",type="primary",use_container_width=True):
-        out=Path(tempfile.gettempdir())/"discovery_story.mp4"; progress=st.progress(0.0); status=st.empty()
+        master=Path(tempfile.gettempdir())/"discovery_story_master.mp4"; out=Path(tempfile.gettempdir())/f"discovery_story_{aspect.replace(':','x')}.mp4"; progress=st.progress(0.0); status=st.empty()
         try:
-            result,err=render_evidence_board_video(board_bg,items,beats,out,narrator_voice=NARRATOR_VOICES[narrator],stamp_text=stamp or None,progress_cb=lambda p:progress.progress(min(1,p)))
+            result,err=render_evidence_board_video(board_bg,items,beats,master,narrator_voice=NARRATOR_VOICES[narrator],stamp_text=stamp or None,progress_cb=lambda p:progress.progress(min(.9,p*.9)))
             if err: status.error(f"Render failed: {err}"); return
-            if result and Path(result).exists():
-                status.success("Discovery Story created."); data=Path(result).read_bytes(); st.video(data)
-                st.download_button("⬇️ Download MP4",data=data,file_name="discovery_story.mp4",mime="video/mp4")
-                if fmt!="16:9 Landscape": st.warning("The renderer currently creates a 16:9 master; the selected vertical/square setting is saved as a preference until the crop/export pass is enabled.")
+            final,err=finalize_discovery_export(result,out,beats,items,aspect=aspect,subtitles=subtitles,labels=labels,title=story.get("title","DISCOVERY STORY") if story else "DISCOVERY STORY",progress_cb=lambda p:progress.progress(min(1,p)))
+            if err: status.error(f"Final export failed: {err}"); return
+            if final and Path(final).exists():
+                status.success(f"Discovery Story created — {fmt}"); data=Path(final).read_bytes(); st.video(data)
+                st.download_button("⬇️ Download MP4",data=data,file_name=f"discovery_story_{aspect.replace(':','x')}.mp4",mime="video/mp4")
                 st.subheader("🧾 Evidence source / credit record")
                 for i,c in enumerate(credits,1): st.write(f"{i}. {c}")
-                if subtitles: st.info("Subtitle preference saved for the discovery workflow; subtitle burn-in is the next renderer-level export step.")
-                if labels: st.info("Evidence labels are enabled as a visual preference; label burn-in will be added to the renderer export layer.")
         except Exception as exc: status.error(f"Render failed: {exc}")
