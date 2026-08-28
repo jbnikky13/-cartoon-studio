@@ -20,7 +20,9 @@ try:
 except Exception as exc: EXPLAINER_STUDIO_ERROR=exc
 EVIDENCE_BOARD_AVAILABLE=False; EVIDENCE_BOARD_ERROR=None
 try:
- from evidence_board_ui import render_evidence_board_studio; EVIDENCE_BOARD_AVAILABLE=True
+ from evidence_board_ui import render_evidence_board_studio
+ from video_evidence_ui import render_video_evidence_panel
+ EVIDENCE_BOARD_AVAILABLE=True
 except Exception as exc: EVIDENCE_BOARD_ERROR=exc
 MOTION_PRESETS=["Automatic (dialogue gestures)","Idle","Talk","Walk","Run","Jump","Bounce","Float","Nod","Wave","Point","Shake","Spin","Slide Left","Slide Right","Dance","Celebrate","Crouch","Pulse"]
 def apply_classic_motion_override(label):
@@ -56,7 +58,10 @@ elif mode=="📊 Explainer":
  if EXPLAINER_STUDIO_AVAILABLE: render_explainer_studio()
  else: st.error("Explainer could not be loaded."); st.code(str(EXPLAINER_STUDIO_ERROR))
 elif mode=="🕵️ Evidence Board":
- if EVIDENCE_BOARD_AVAILABLE: render_evidence_board_studio()
+ if EVIDENCE_BOARD_AVAILABLE:
+  render_video_evidence_panel()
+  st.divider()
+  render_evidence_board_studio()
  else: st.error("Discovery Story could not be loaded."); st.code(str(EVIDENCE_BOARD_ERROR))
 elif mode=="🎞️ Join Clips":
  st.header("🎞️ Join Clips"); uploads=st.file_uploader("Upload MP4 clips in order",type=["mp4","mov","m4v"],accept_multiple_files=True)
