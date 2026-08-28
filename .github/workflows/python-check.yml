@@ -39,6 +39,10 @@ jobs:
           import explainer_studio_ui
           import realityblend_ui
           import evidence_board_ui
+          import video_story_extractor
+          import video_visual_analysis
+          import video_url_adapter
+          import video_evidence_ui
           print("All Cartoon Studio modules imported successfully.")
           PY
 
@@ -58,4 +62,3 @@ jobs:
           if missing:
               raise SystemExit(f"Missing character assets: {missing}")
           print(f"Verified {len(chars)} full-body character assets.")
-          PY
