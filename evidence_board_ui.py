@@ -3,7 +3,7 @@ from pathlib import Path
 import io,tempfile,random
 import streamlit as st
 from PIL import Image,ImageDraw
-from evidence_board_renderer import BoardItem,Beat,generate_default_corkboard,render_evidence_board_video,EDGE_TTS_AVAILABLE
+from evidence_board_renderer import BoardItem,Beat,generate_default_corkboard,render_evidence_board_video
 from evidence_board_export import finalize_discovery_export
 from evidence_link_story import fetch_story,make_story_beats,download_images,narration_for_image
 NARRATOR_VOICES={"Bright / Female":"en-US-AriaNeural","Warm / Female":"en-US-JennyNeural","Calm / Male":"en-US-DavisNeural","Deep / Male":"en-US-GuyNeural","Documentary / Male":"en-US-ChristopherNeural"}
@@ -32,7 +32,6 @@ def make_board_background(style,w=1280,h=720):
 
 def positions(n):
  p={1:[(.5,.5)],2:[(.32,.42),(.68,.55)],3:[(.22,.35),(.52,.55),(.80,.32)],4:[(.20,.30),(.45,.60),(.68,.28),(.85,.58)],5:[(.16,.30),(.38,.55),(.58,.28),(.78,.55),(.90,.25)],6:[(.14,.28),(.32,.58),(.50,.25),(.68,.58),(.84,.28),(.92,.62)]}; return p.get(n,[(.1+.8*i/max(1,n-1),.4) for i in range(n)])
-
 def _img(data):
  try:return Image.open(io.BytesIO(data)).convert("RGBA")
  except Exception:return None
@@ -48,13 +47,13 @@ def render_evidence_board_studio():
      story=fetch_story(url,max_images=12); found=download_images(story,max_downloads=8); beats=make_story_beats(story,count=max(2,min(6,len(found) or 4)))
     st.session_state.update(eb_story=story,eb_found=found,eb_beats=beats); st.success(f"Draft created: {story['title']} — {len(found)} usable pictures")
    except Exception as exc:st.error(f"Discovery failed: {exc}")
- story=st.session_state.get("eb_story"); found=st.session_state.get("eb_found",[])
+ story=st.session_state.get("eb_story"); found=st.session_state.get("eb_found",[]); video_found=st.session_state.get("eb_video_selected",[])
  if story:
   st.markdown(f"**{story.get('title','Story')}**"); st.caption(story.get("description","")[:600]); st.caption(f"Source: {story.get('url','')}")
   with st.expander("📖 Extracted story text"):st.write(story.get("text","")[:16000])
  st.subheader("2. Investigation background"); style=st.selectbox("Board style",BG_STYLES,key="eb_style"); board_bg=make_board_background(style); st.image(board_bg,caption=style,width=430); custom=st.file_uploader("Or upload your own background",type=["png","jpg","jpeg"],key="eb_bg")
  if custom:board_bg=Image.open(custom).convert("RGB").resize((1280,720))
- st.subheader("3. Evidence"); source=st.radio("Evidence source",["Discovered pictures","Upload manually"],horizontal=True,key="eb_source"); selected=[]; credits=[]
+ st.subheader("3. Evidence"); options=["Discovered pictures","Upload manually"]+(["Video evidence"] if video_found else []); source=st.radio("Evidence source",options,horizontal=True,key="eb_source"); selected=[]; credits=[]
  if source=="Discovered pictures" and found:
   st.caption("Only use images you have permission to publish. Source URLs are retained for attribution/review."); cols=st.columns(min(4,max(1,len(found))))
   for i,v in enumerate(found):
@@ -63,16 +62,24 @@ def render_evidence_board_studio():
    with cols[i%len(cols)]:
     st.image(im,width=140,caption=f"Evidence {i+1}")
     if st.checkbox("Use",value=i<min(6,len(found)),key=f"eb_use_{i}"):selected.append((f"evidence_{i+1}.jpg",im,v.get("url",""))); credits.append(v.get("url",""))
+ elif source=="Video evidence":
+  st.caption("Frames selected by Video Intelligence are ready for the board."); cols=st.columns(min(3,max(1,len(video_found))))
+  for i,v in enumerate(video_found[:6]):
+   im=_img(v.get("bytes",b""))
+   if im is None:continue
+   with cols[i%len(cols)]:
+    st.image(im,width=160,caption=v.get("name",f"Video evidence {i+1}")); st.caption(v.get("reason","")[:180])
+    if st.checkbox("Use",value=i<min(6,len(video_found)),key=f"eb_video_board_use_{i}"):selected.append((v.get("name",f"video_evidence_{i+1}.jpg"),im,v.get("url","Video source"))); credits.append(v.get("url","Video source"))
  else:
   ups=st.file_uploader("Upload 2-6 photos/documents",type=["png","jpg","jpeg"],accept_multiple_files=True,key="eb_uploads")
   for u in (ups or [])[:6]:selected.append((u.name,Image.open(u).convert("RGBA"),"User-provided")); credits.append("User-provided")
  if len(selected)<2:st.info("Choose at least 2 evidence items to continue."); return
- selected=selected[:6]; pos=positions(len(selected)); items=[]; beats=[]; st.subheader("4. Evidence placement + narration"); sentences_used=set(); cols=st.columns(min(3,len(selected)))
+ selected=selected[:6]; pos=positions(len(selected)); items=[]; beats=[]; st.subheader("4. Evidence placement + narration"); sentences_used=set(); auto=st.session_state.get("eb_beats",[]); cols=st.columns(min(3,len(selected)))
  for i,(name,im,src) in enumerate(selected):
   x,y=pos[i]
   with cols[i%len(cols)]:
    st.image(im,width=120,caption=name); x=st.slider("X",.05,.95,x,.01,key=f"eb_x_{i}"); y=st.slider("Y",.10,.90,y,.01,key=f"eb_y_{i}"); rot=st.slider("Tilt",-20,20,-8 if i%2==0 else 8,key=f"eb_rot_{i}"); scale=st.slider("Size",.10,.40,.22,.01,key=f"eb_scale_{i}")
-   default_line=narration_for_image(story,src,sentences_used,intro=(i==0)) if story else f"Evidence item {i+1} reveals another part of the story."
+   default_line=narration_for_image(story,src,sentences_used,intro=(i==0)) if story else (auto[i] if i<len(auto) else f"Evidence item {i+1} reveals another part of the story.")
    line=st.text_area("Narration",value=default_line,height=90,key=f"eb_line_{i}")
   items.append(BoardItem(name=name,image=im,x=x,y=y,scale=scale,rotation=rot)); beats.append(Beat(text=line,item_index=i,connect_from_index=i-1 if i else None))
  st.subheader("5. Audio + visual annotations"); narrator=st.selectbox("Narrator voice",list(NARRATOR_VOICES.keys())); subtitles=st.checkbox("Burn subtitles into MP4",True,key="eb_subtitles"); labels=st.checkbox("Burn evidence labels into MP4",True,key="eb_labels"); stamp=st.text_input("Final conclusion / stamp",placeholder="CONNECTED • WHAT WE KNOW",key="eb_stamp"); st.caption("Animated connecting strings are rendered between each revealed evidence item.")
