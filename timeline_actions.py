@@ -1,15 +1,11 @@
-"""Lightweight per-character action timeline for Cartoon Studio V6.
+"""Lightweight per-character action timeline for Cartoon Studio V6/V2.
 
-Timeline syntax:
-  0-2: Walk In
-  2-4: Talk
-  4-5: Point
-  5-7: Walk
-
-The module is renderer-agnostic: it returns the active action and a
-normalized elapsed time for any scene frame.
+Keeps the existing text timeline API while exposing procedural pose samples
+for Classic Cartoon, RealityBlend and Evidence Board renderers.
 """
 from dataclasses import dataclass
+
+from animation_engine import MotionCue, pose_for_action, pose_from_timeline
 
 
 @dataclass(frozen=True)
@@ -47,3 +43,15 @@ def active_action(text, seconds, default="Idle"):
 def timeline_duration(text):
     cues = parse_timeline(text)
     return max((c.end for c in cues), default=0.0)
+
+
+def procedural_pose(text, seconds, base=None):
+    """Sample the realistic procedural pose for the current timeline time."""
+    cues = [MotionCue(c.action.lower().replace(" ", "_"), c.start, c.end-c.start) for c in parse_timeline(text)]
+    return pose_from_timeline(cues, float(seconds), base=base)
+
+
+def procedural_action(action, elapsed, duration=1.0, base=None, **params):
+    """Direct procedural action sampler for renderers."""
+    normalized = str(action or "idle").lower().replace(" ", "_")
+    return pose_for_action(normalized, float(elapsed), max(0.001, float(duration)), base=base, params=params)
